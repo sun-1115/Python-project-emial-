@@ -1,0 +1,37 @@
+{
+  "name": "github-track",
+  "version": "1.0.0",
+  "description": "Fetch GitHub users by search criteria on a schedule and store them in SQLite",
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsx src/index.ts",
+    "crawl:once": "tsx src/index.ts --once",
+    "ui": "tsx src/server.ts"
+  },
+  "keywords": [
+    "github",
+    "users",
+    "sqlite",
+    "scheduler"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "dependencies": {
+    "@octokit/plugin-throttling": "^11.0.3",
+    "@octokit/rest": "^22.0.1",
+    "dotenv": "^16.4.5",
+    "express": "^5.2.1",
+    "node-cron": "^3.0.3"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "@types/node": "^24.0.0",
+    "@types/node-cron": "^3.0.11",
+    "tsx": "^4.16.0",
+    "typescript": "^5.5.0"
+  }
+}

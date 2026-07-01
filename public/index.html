@@ -1,0 +1,332 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Github Track — Users</title>
+  <style>
+    :root {
+      --bg: #0b0e14;
+      --bg-soft: #11151f;
+      --card: #151a26;
+      --card-hover: #1b2233;
+      --border: #232a3b;
+      --text: #e7ecf3;
+      --muted: #8b95a7;
+      --accent: #6ea8fe;
+      --accent-2: #a78bfa;
+      --chip: #1e2536;
+      --radius: 14px;
+    }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; }
+    body {
+      margin: 0; color: var(--text);
+      font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Inter, sans-serif;
+      background:
+        radial-gradient(1200px 600px at 15% -10%, #1a2036 0%, transparent 60%),
+        radial-gradient(1000px 500px at 100% 0%, #1a1730 0%, transparent 55%),
+        var(--bg);
+      background-attachment: fixed;
+    }
+
+    header {
+      position: sticky; top: 0; z-index: 20;
+      backdrop-filter: blur(10px);
+      background: rgba(11, 14, 20, 0.72);
+      border-bottom: 1px solid var(--border);
+    }
+    .bar {
+      max-width: 1240px; margin: 0 auto; padding: 16px 24px;
+      display: flex; gap: 14px; align-items: center; flex-wrap: wrap;
+    }
+    .brand { display: flex; align-items: center; gap: 10px; margin-right: 8px; }
+    .logo {
+      width: 30px; height: 30px; border-radius: 9px;
+      background: linear-gradient(135deg, var(--accent), var(--accent-2));
+      display: grid; place-items: center; font-weight: 800; color: #0b0e14;
+    }
+    .brand h1 { font-size: 17px; margin: 0; letter-spacing: .2px; }
+    .brand span { color: var(--muted); font-size: 12px; display: block; margin-top: -2px; }
+
+    .field { position: relative; flex: 1; min-width: 220px; }
+    .field svg { position: absolute; left: 12px; top: 50%; transform: translateY(-50%); color: var(--muted); }
+    input[type="search"] {
+      width: 100%; padding: 11px 14px 11px 38px; border-radius: 11px;
+      border: 1px solid var(--border); background: var(--bg-soft); color: inherit;
+      outline: none; transition: border-color .15s, box-shadow .15s;
+    }
+    input[type="search"]:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(110,168,254,.15); }
+    select {
+      padding: 11px 12px; border-radius: 11px; border: 1px solid var(--border);
+      background: var(--bg-soft); color: inherit; cursor: pointer;
+    }
+    .btn {
+      display: inline-flex; align-items: center; gap: 7px; cursor: pointer;
+      padding: 11px 14px; border-radius: 11px; border: 1px solid transparent;
+      background: linear-gradient(135deg, var(--accent), var(--accent-2));
+      color: #0b0e14; font-weight: 700; font-size: 14px; white-space: nowrap;
+      transition: filter .12s, transform .1s;
+    }
+    .btn:hover { filter: brightness(1.08); }
+    .btn:active { transform: translateY(1px); }
+    .btn:disabled { opacity: .5; cursor: not-allowed; filter: none; }
+    .count { color: var(--muted); font-size: 13px; white-space: nowrap; }
+    .count b { color: var(--text); }
+
+    main { max-width: 1240px; margin: 0 auto; padding: 24px; }
+    #grid {
+      display: grid; gap: 14px;
+      grid-template-columns: repeat(3, minmax(0, 1fr)); /* 3 users per row */
+    }
+    @media (max-width: 760px) { #grid { grid-template-columns: 1fr; } }
+    .card {
+      display: flex; gap: 14px; padding: 16px; border-radius: var(--radius);
+      background: linear-gradient(180deg, var(--card), var(--bg-soft));
+      border: 1px solid var(--border); align-items: center;
+      transition: transform .12s ease, border-color .12s ease, background .12s ease;
+    }
+    .card:hover { transform: translateY(-3px); border-color: #33405c; background: var(--card-hover); }
+    .avatar {
+      width: 60px; height: 60px; border-radius: 50%; flex-shrink: 0;
+      background: var(--chip); object-fit: cover;
+      box-shadow: 0 0 0 2px var(--border), 0 6px 18px rgba(0,0,0,.35);
+    }
+    .info { min-width: 0; flex: 1; }
+    .info .top { display: flex; align-items: center; gap: 8px; }
+    .info a.login { color: var(--accent); text-decoration: none; font-weight: 700; font-size: 15px; }
+    .info a.login:hover { text-decoration: underline; }
+    .info .name { color: var(--text); font-size: 13.5px; margin: 1px 0 8px;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .info .name.empty { color: var(--muted); font-style: italic; }
+    .chips { display: flex; gap: 6px; flex-wrap: wrap; }
+    .chip {
+      font-size: 11.5px; padding: 3px 9px; border-radius: 999px;
+      background: var(--chip); border: 1px solid var(--border); color: var(--muted);
+      display: inline-flex; align-items: center; gap: 5px;
+    }
+    .chip.loc { color: #cdd6e6; }
+    .chip.foll { color: #ffd6a5; }
+    .links { display: flex; gap: 8px; margin-top: 9px; flex-wrap: wrap; }
+    .links a {
+      display: inline-flex; align-items: center; gap: 5px; text-decoration: none;
+      font-size: 12px; padding: 4px 9px; border-radius: 8px;
+      border: 1px solid var(--border); background: var(--bg-soft); color: #cdd6e6;
+      transition: border-color .12s, color .12s;
+    }
+    .links a:hover { border-color: #33405c; color: #fff; }
+    .links a.tg { color: #7cc4ff; }
+    .links a.mail { color: #9be59b; }
+    .links a svg { width: 14px; height: 14px; }
+    .pill {
+      margin-left: auto; font-size: 10.5px; letter-spacing: .3px; text-transform: uppercase;
+      padding: 3px 8px; border-radius: 999px; font-weight: 700;
+    }
+    .pill.seed { background: rgba(110,168,254,.16); color: var(--accent); }
+    .pill.repo { background: rgba(167,139,250,.16); color: var(--accent-2); }
+
+    #status { text-align: center; color: var(--muted); padding: 60px 24px; }
+
+    /* Pagination */
+    .pager {
+      display: flex; gap: 6px; justify-content: center; align-items: center;
+      flex-wrap: wrap; margin: 28px 0 8px;
+    }
+    .pager button {
+      min-width: 40px; height: 40px; padding: 0 12px; border-radius: 10px;
+      border: 1px solid var(--border); background: var(--bg-soft); color: var(--text);
+      cursor: pointer; font-size: 14px; transition: background .12s, border-color .12s;
+    }
+    .pager button:hover:not(:disabled) { background: var(--card-hover); border-color: #33405c; }
+    .pager button.active {
+      background: linear-gradient(135deg, var(--accent), var(--accent-2));
+      border-color: transparent; color: #0b0e14; font-weight: 800;
+    }
+    .pager button:disabled { opacity: .4; cursor: not-allowed; }
+    .pager .dots { color: var(--muted); padding: 0 4px; }
+    .pageinfo { text-align: center; color: var(--muted); font-size: 13px; margin-bottom: 40px; }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="bar">
+      <div class="brand">
+        <div class="logo">GT</div>
+        <div><h1>Github Track</h1><span>USA users & collaborators</span></div>
+      </div>
+      <label class="field">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/>
+        </svg>
+        <input id="search" type="search" placeholder="Search username, name, or location…" />
+      </label>
+      <select id="sort">
+        <option value="username">Sort: A–Z</option>
+        <option value="followers">Sort: Most followers</option>
+      </select>
+      <button id="openAll" class="btn" title="Open every user on this page in a new tab">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>
+        </svg>
+        Open all
+      </button>
+      <div class="count" id="count"></div>
+    </div>
+  </header>
+
+  <main>
+    <div id="grid"></div>
+    <div id="status"></div>
+    <div class="pager" id="pager"></div>
+    <div class="pageinfo" id="pageinfo"></div>
+  </main>
+
+  <script>
+    const PAGE_SIZE = 15;
+    const grid = document.getElementById('grid');
+    const statusEl = document.getElementById('status');
+    const countEl = document.getElementById('count');
+    const pagerEl = document.getElementById('pager');
+    const pageInfoEl = document.getElementById('pageinfo');
+    const searchEl = document.getElementById('search');
+    const sortEl = document.getElementById('sort');
+
+    let state = { q: '', sort: 'username', page: 1, users: [], totalPages: 1 };
+    const openAllEl = document.getElementById('openAll');
+
+    const esc = (s) => String(s).replace(/[&<>"']/g, (c) =>
+      ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+    function card(u) {
+      const el = document.createElement('div');
+      el.className = 'card';
+      const pill = u.discovered_via === 'search'
+        ? '<span class="pill seed">seed</span>'
+        : '<span class="pill repo">via repo</span>';
+      const loc = u.location
+        ? `<span class="chip loc">📍 ${esc(u.location)}</span>` : '';
+
+      const links = [];
+      // GitHub profile link
+      links.push(`<a href="${esc(u.html_url || ('https://github.com/' + u.login))}" target="_blank" rel="noopener">
+        <svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+        GitHub</a>`);
+      if (u.telegram) {
+        links.push(`<a class="tg" href="${esc(u.telegram)}" target="_blank" rel="noopener">
+          <svg viewBox="0 0 24 24" fill="currentColor"><path d="M22 3 2 11l6 2 2 6 3-4 5 4z"/></svg>
+          Telegram</a>`);
+      }
+      if (u.email) {
+        links.push(`<a class="mail" href="mailto:${esc(u.email)}">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="m2 6 10 7L22 6"/></svg>
+          Email</a>`);
+      }
+
+      el.innerHTML = `
+        <img class="avatar" loading="lazy" src="${esc(u.avatar_url || '')}" alt="" />
+        <div class="info">
+          <div class="top">
+            <a class="login" href="${esc(u.html_url || '#')}" target="_blank" rel="noopener">@${esc(u.login)}</a>
+            ${pill}
+          </div>
+          <div class="name ${u.name ? '' : 'empty'}">${u.name ? esc(u.name) : 'No name'}</div>
+          <div class="chips">
+            ${loc}
+            <span class="chip foll">★ ${(u.followers ?? 0).toLocaleString()} followers</span>
+          </div>
+          <div class="links">${links.join('')}</div>
+        </div>`;
+      return el;
+    }
+
+    function pagerButton(label, page, { active = false, disabled = false } = {}) {
+      const b = document.createElement('button');
+      b.textContent = label;
+      if (active) b.classList.add('active');
+      if (disabled) b.disabled = true;
+      else b.addEventListener('click', () => { state.page = page; load(); window.scrollTo({ top: 0, behavior: 'smooth' }); });
+      return b;
+    }
+
+    function renderPager(page, totalPages) {
+      pagerEl.innerHTML = '';
+      if (totalPages <= 1) return;
+      pagerEl.appendChild(pagerButton('‹ Prev', page - 1, { disabled: page <= 1 }));
+
+      // windowed page numbers with ellipsis
+      const pages = new Set([1, totalPages, page, page - 1, page + 1]);
+      const sorted = [...pages].filter((p) => p >= 1 && p <= totalPages).sort((a, b) => a - b);
+      let prev = 0;
+      for (const p of sorted) {
+        if (p - prev > 1) {
+          const d = document.createElement('span'); d.className = 'dots'; d.textContent = '…';
+          pagerEl.appendChild(d);
+        }
+        pagerEl.appendChild(pagerButton(String(p), p, { active: p === page }));
+        prev = p;
+      }
+      pagerEl.appendChild(pagerButton('Next ›', page + 1, { disabled: page >= totalPages }));
+    }
+
+    async function load() {
+      statusEl.textContent = 'Loading…';
+      grid.style.opacity = '.4';
+      const params = new URLSearchParams({
+        page: state.page, pageSize: PAGE_SIZE, sort: state.sort,
+      });
+      if (state.q) params.set('q', state.q);
+      try {
+        const res = await fetch('/api/users?' + params);
+        const data = await res.json();
+        state.users = data.users;
+        state.totalPages = data.totalPages;
+        openAllEl.disabled = data.users.length === 0;
+        grid.innerHTML = '';
+        data.users.forEach((u) => grid.appendChild(card(u)));
+        countEl.innerHTML = `<b>${data.total.toLocaleString()}</b> users`;
+        statusEl.textContent = data.users.length ? '' : 'No users match your search.';
+        renderPager(data.page, data.totalPages);
+        pageInfoEl.textContent = data.total
+          ? `Page ${data.page} of ${data.totalPages}` : '';
+      } catch (e) {
+        statusEl.textContent = 'Error loading users.';
+      } finally {
+        grid.style.opacity = '1';
+      }
+    }
+
+    let debounce;
+    searchEl.addEventListener('input', () => {
+      clearTimeout(debounce);
+      debounce = setTimeout(() => { state.q = searchEl.value.trim(); state.page = 1; load(); }, 300);
+    });
+    sortEl.addEventListener('change', () => { state.sort = sortEl.value; state.page = 1; load(); });
+
+    // Open every user on the current page in a new tab, then advance a page.
+    // Uses the recursive window.open() pattern (same approach as the GitHub bookmarklet).
+    openAllEl.addEventListener('click', () => {
+      const urls = state.users
+        .map((u) => u.html_url || (u.login ? 'https://github.com/' + u.login : null))
+        .filter(Boolean);
+      if (!urls.length) return;
+
+      let index = 0;
+      function openNextTab() {
+        if (index < urls.length) {
+          window.open(urls[index], '_blank');
+          index++;
+          openNextTab();
+        } else {
+          // all tabs opened -> go to next page (wrap to page 1 after the last)
+          state.page = state.page < state.totalPages ? state.page + 1 : 1;
+          load();
+          window.scrollTo({ top: 0, behavior: 'smooth' });
+        }
+      }
+      openNextTab();
+    });
+
+    load();
+  </script>
+</body>
+</html>
