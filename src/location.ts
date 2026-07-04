@@ -134,6 +134,11 @@ function loadExtraCities(): void {
 }
 loadExtraCities();
 
+/** All known US states + cities, for use as GitHub search location facets. */
+export function getUsSearchLocations(): string[] {
+  return [...STATE_SINGLE, ...STATE_MULTIWORD, ...US_CITIES];
+}
+
 /** True if the location is empty/unknown or looks like it's in the USA. */
 export function isUsOrEmpty(location: string | null | undefined): boolean {
   if (!location) return true;

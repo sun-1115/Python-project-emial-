@@ -2,7 +2,7 @@ import express from 'express';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { loadConfig } from './config.js';
-import { UserStore } from './db.js';
+import { UserStore, SORT_SQL, type SortKey } from './db.js';
 
 const config = loadConfig();
 const store = new UserStore(config.dbPath);
@@ -16,7 +16,8 @@ app.use(express.static(publicDir));
 // Page-numbered users API: ?page=1&pageSize=24&q=&sort=username|followers
 app.get('/api/users', (req, res) => {
   const q = typeof req.query.q === 'string' ? req.query.q : undefined;
-  const sort = req.query.sort === 'followers' ? 'followers' : 'username';
+  const requested = String(req.query.sort ?? '');
+  const sort: SortKey = requested in SORT_SQL ? (requested as SortKey) : 'username';
   const page = Number(req.query.page) || 1;
   const pageSize = Number(req.query.pageSize) || 24;
 

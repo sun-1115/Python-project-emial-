@@ -144,6 +144,23 @@
     }
     .pager button:disabled { opacity: .4; cursor: not-allowed; }
     .pager .dots { color: var(--muted); padding: 0 4px; }
+    .pager .jump {
+      display: inline-flex; align-items: center; gap: 7px;
+      margin-left: 10px; color: var(--muted); font-size: 13px;
+    }
+    .pager .jump input {
+      width: 64px; height: 40px; padding: 0 10px; border-radius: 10px;
+      border: 1px solid var(--border); background: var(--bg-soft); color: var(--text);
+      font-size: 14px; text-align: center; outline: none;
+      transition: border-color .15s, box-shadow .15s;
+    }
+    .pager .jump input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(110,168,254,.15); }
+    .pager .jump button {
+      min-width: auto; height: 40px; padding: 0 14px;
+      background: linear-gradient(135deg, var(--accent), var(--accent-2));
+      border-color: transparent; color: #0b0e14; font-weight: 700;
+    }
+    @media (max-width: 760px) { .pager .jump { margin-left: 0; width: 100%; justify-content: center; } }
     .pageinfo { text-align: center; color: var(--muted); font-size: 13px; margin-bottom: 40px; }
   </style>
 </head>
@@ -160,9 +177,25 @@
         </svg>
         <input id="search" type="search" placeholder="Search username, name, or location…" />
       </label>
-      <select id="sort">
-        <option value="username">Sort: A–Z</option>
-        <option value="followers">Sort: Most followers</option>
+      <select id="sort" title="Sort users">
+        <optgroup label="ID">
+          <option value="id">ID: 1 → N (oldest first)</option>
+          <option value="id_desc">ID: N → 1 (newest first)</option>
+        </optgroup>
+        <optgroup label="Name">
+          <option value="username">A → Z</option>
+          <option value="username_desc">Z → A</option>
+        </optgroup>
+        <optgroup label="Followers">
+          <option value="followers">Most followers</option>
+          <option value="followers_asc">Fewest followers</option>
+        </optgroup>
+        <optgroup label="Activity">
+          <option value="repos">Most repositories</option>
+          <option value="newest">Newest GitHub account</option>
+          <option value="oldest">Oldest GitHub account</option>
+          <option value="recent">Recently discovered</option>
+        </optgroup>
       </select>
       <button id="openAll" class="btn" title="Open every user on this page in a new tab">
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -191,7 +224,9 @@
     const searchEl = document.getElementById('search');
     const sortEl = document.getElementById('sort');
 
-    let state = { q: '', sort: 'username', page: 1, users: [], totalPages: 1 };
+    let state = { q: '', sort: 'id', page: 1, users: [], totalPages: 1 };
+    // Keep the dropdown's shown option in sync with the actual default sort.
+    sortEl.value = state.sort;
     const openAllEl = document.getElementById('openAll');
 
     const esc = (s) => String(s).replace(/[&<>"']/g, (c) =>
@@ -266,6 +301,29 @@
         prev = p;
       }
       pagerEl.appendChild(pagerButton('Next ›', page + 1, { disabled: page >= totalPages }));
+
+      // Jump-to-page control — for when there are too many pages to click through.
+      const jump = document.createElement('span');
+      jump.className = 'jump';
+      const input = document.createElement('input');
+      input.type = 'number';
+      input.min = '1';
+      input.max = String(totalPages);
+      input.placeholder = String(page);
+      input.setAttribute('aria-label', 'Go to page');
+      const go = () => {
+        let p = parseInt(input.value, 10);
+        if (!Number.isFinite(p)) return;
+        p = Math.min(Math.max(p, 1), totalPages); // clamp into range
+        input.value = '';
+        if (p !== state.page) { state.page = p; load(); window.scrollTo({ top: 0, behavior: 'smooth' }); }
+      };
+      input.addEventListener('keydown', (e) => { if (e.key === 'Enter') go(); });
+      const goBtn = document.createElement('button');
+      goBtn.textContent = 'Go';
+      goBtn.addEventListener('click', go);
+      jump.append('Go to', input, `/ ${totalPages}`, goBtn);
+      pagerEl.appendChild(jump);
     }
 
     async function load() {

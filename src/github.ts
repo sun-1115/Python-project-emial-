@@ -52,6 +52,26 @@ export function extractTelegram(text?: string | null): string | null {
   return null;
 }
 
+// --- date helpers for the deep-split date sweep (YYYY-MM-DD strings) ---
+const DAY_MS = 86_400_000;
+const toMs = (d: string) => Date.parse(d + 'T00:00:00Z');
+const fmtDate = (ms: number) => new Date(ms).toISOString().slice(0, 10);
+const addDay = (d: string) => fmtDate(toMs(d) + DAY_MS);
+const midDate = (a: string, b: string) => fmtDate(toMs(a) + Math.floor((toMs(b) - toMs(a)) / 2));
+const cmpDate = (a: string, b: string) => toMs(a) - toMs(b);
+
+// Follower ranges to break apart a single day that still exceeds 1000 users.
+const FOLLOWER_BUCKETS = [
+  '0..0', '1..2', '3..5', '6..10', '11..25', '26..50', '51..100',
+  '101..250', '251..500', '501..1000', '1001..5000', '>5000',
+];
+
+export interface DeepResult {
+  logins: string[];
+  nextDate: string | null; // where the sweep stopped (null = facet fully swept)
+  leaves: number;
+}
+
 export interface RepoRef {
   owner: string;
   name: string;
@@ -115,6 +135,96 @@ export class GitHubClient {
     return logins;
   }
 
+  /** One search request → the User logins on that page plus the total match count. */
+  private async searchOnce(
+    q: string,
+    page: number,
+    perPage: number,
+    sort?: 'followers' | 'repositories' | 'joined',
+    order: 'asc' | 'desc' = 'desc'
+  ): Promise<{ logins: string[]; total: number; items: number }> {
+    const res = await withRetry(
+      () => this.octokit.rest.search.users({ q, sort, order, per_page: perPage, page }),
+      `search "${q}" p${page}`
+    );
+    const logins = res.data.items.filter((i) => i.type === 'User').map((i) => i.login);
+    return { logins, total: res.data.total_count, items: res.data.items.length };
+  }
+
+  /** Page a single query fully (bounded by GitHub's 1000-result window). */
+  private async pageLeaf(
+    q: string,
+    sort?: 'followers' | 'repositories' | 'joined',
+    order: 'asc' | 'desc' = 'desc'
+  ): Promise<string[]> {
+    const perPage = 100;
+    const out: string[] = [];
+    for (let page = 1; out.length < 1000 && page <= 10; page++) {
+      const { logins, items } = await this.searchOnce(q, page, perPage, sort, order);
+      out.push(...logins);
+      if (items < perPage) break;
+    }
+    return out;
+  }
+
+  /**
+   * Exhaustively collect logins for one facet (e.g. `location:"Texas" language:go`)
+   * by sweeping account-creation date windows. Each window is shrunk until its
+   * total_count ≤ 1000 so it can be paged completely; a single day that still
+   * exceeds 1000 is broken apart by follower buckets.
+   *
+   * Returns up to (roughly) `maxCollect` logins and a `nextDate` cursor so the
+   * caller can resume this facet on a later cycle instead of re-covering it.
+   */
+  async searchUsersDeep(
+    facet: string,
+    startFrom: string,
+    endDate: string,
+    opts: {
+      sort?: 'followers' | 'repositories' | 'joined';
+      order?: 'asc' | 'desc';
+      maxCollect: number;
+    }
+  ): Promise<DeepResult> {
+    const { sort, order = 'desc', maxCollect } = opts;
+    const seen = new Set<string>();
+    const collected: string[] = [];
+    const add = (arr: string[]) => {
+      for (const l of arr) if (!seen.has(l)) { seen.add(l); collected.push(l); }
+    };
+
+    let cur = startFrom;
+    let leaves = 0;
+    while (cmpDate(cur, endDate) <= 0 && collected.length < maxCollect) {
+      // Shrink [cur, hi] until it holds ≤ 1000 users (or collapses to one day).
+      let hi = endDate;
+      let { total } = await this.searchOnce(`${facet} created:${cur}..${hi}`, 1, 1, sort, order);
+      let guard = 0;
+      while (total > 1000 && cmpDate(cur, hi) < 0 && guard++ < 40) {
+        hi = midDate(cur, hi);
+        ({ total } = await this.searchOnce(`${facet} created:${cur}..${hi}`, 1, 1, sort, order));
+      }
+
+      if (total === 0) {
+        cur = addDay(hi);
+        continue;
+      }
+      if (total > 1000 && cmpDate(cur, hi) === 0) {
+        // Single day, still too big → split by follower buckets.
+        for (const b of FOLLOWER_BUCKETS) {
+          add(await this.pageLeaf(`${facet} created:${cur}..${cur} followers:${b}`, sort, order));
+        }
+      } else {
+        add(await this.pageLeaf(`${facet} created:${cur}..${hi}`, sort, order));
+      }
+      leaves++;
+      cur = addDay(hi);
+    }
+
+    const nextDate = cmpDate(cur, endDate) <= 0 ? cur : null;
+    return { logins: collected, nextDate, leaves };
+  }
+
   /** Fetch a full user profile and map it to a UserRecord. */
   async getUser(login: string, discoveredVia: UserRecord['discovered_via']): Promise<UserRecord> {
     const { data } = await withRetry(
@@ -167,10 +277,14 @@ export class GitHubClient {
     return null;
   }
 
-  /** List a user's own repositories, EXCLUDING forks, up to `max`. */
-  async listUserRepos(login: string, max: number): Promise<RepoRef[]> {
+  /**
+   * List a user's own repositories, EXCLUDING forks and repos larger than
+   * `maxSizeMb` MB (0 = no size limit), up to `max`.
+   */
+  async listUserRepos(login: string, max: number, maxSizeMb = 0): Promise<RepoRef[]> {
     const repos: RepoRef[] = [];
     const perPage = 100;
+    const maxSizeKb = maxSizeMb > 0 ? maxSizeMb * 1024 : 0; // GitHub reports repo size in KB
     for (let page = 1; repos.length < max; page++) {
       const res = await withRetry(
         () => this.octokit.rest.repos.listForUser({
@@ -180,6 +294,7 @@ export class GitHubClient {
       );
       for (const r of res.data) {
         if (r.fork) continue; // skip forks (per requirement)
+        if (maxSizeKb && (r.size ?? 0) > maxSizeKb) continue; // skip huge clones
         repos.push({ owner: r.owner.login, name: r.name, fork: false });
         if (repos.length >= max) break;
       }
