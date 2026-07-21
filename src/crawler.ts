@@ -48,7 +48,8 @@ async function deepSeed(
   stamp: () => string
 ): Promise<Set<string>> {
   const facets = buildBaseFacets(config);
-  const today = new Date().toISOString().slice(0, 10);
+  // Sweep only up to the cutoff, so the search never returns accounts newer than it.
+  const endDate = config.createdBefore;
   const seeds = new Set<string>();
 
   let idx = Number(store.getState('deep_facet_idx') ?? '0');
@@ -63,7 +64,7 @@ async function deepSeed(
   while (seeds.size < config.maxSeedUsers && visited < facets.length) {
     const facet = facets[idx % facets.length];
     const remaining = config.maxSeedUsers - seeds.size;
-    const { logins, nextDate } = await client.searchUsersDeep(facet, dateCursor, today, {
+    const { logins, nextDate } = await client.searchUsersDeep(facet, dateCursor, endDate, {
       sort: config.sort,
       order: config.order,
       maxCollect: remaining,
@@ -105,9 +106,22 @@ export async function runCrawl(config: AppConfig, cycle = 0): Promise<void> {
     if (saved >= config.maxTotalUsers) return false;
     seen.add(login);
     try {
-      const user = await client.getUser(login, via);
+      // Cheap fetch first (1 call) so we can drop by date/location BEFORE the
+      // more expensive email/telegram enrichment.
+      const profile = await client.getProfile(login);
+
+      // Keep only OLD accounts: created strictly before the cutoff. Drops new
+      // accounts (e.g. 2026) that slip in via repo contributors. An unknown
+      // creation date is also dropped (can't prove it's old).
+      const created = profile.github_created_at;
+      if (!created || created.slice(0, 10) >= config.createdBefore) return false;
       // Keep only users with no location or a USA location; drop foreign ones.
-      if (!isUsOrEmpty(user.location)) return false;
+      if (!isUsOrEmpty(profile.location)) return false;
+
+      // Now enrich (resolve email + telegram) and require a contactable email.
+      const user = await client.buildRecord(profile, via);
+      if (config.requireEmail && !user.email) return false;
+
       store.upsert(user);
       saved++;
       return true;

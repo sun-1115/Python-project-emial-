@@ -48,6 +48,13 @@
     }
     .brand h1 { font-size: 17px; margin: 0; letter-spacing: .2px; }
     .brand span { color: var(--muted); font-size: 12px; display: block; margin-top: -2px; }
+    .nav { display: flex; gap: 6px; }
+    .nav a {
+      text-decoration: none; color: var(--muted); font-size: 14px; font-weight: 600;
+      padding: 8px 14px; border-radius: 10px; border: 1px solid transparent;
+    }
+    .nav a:hover { color: var(--text); background: var(--bg-soft); }
+    .nav a.active { color: #0b0e14; background: linear-gradient(135deg, var(--accent), var(--accent-2)); }
 
     .field { position: relative; flex: 1; min-width: 220px; }
     .field svg { position: absolute; left: 12px; top: 50%; transform: translateY(-50%); color: var(--muted); }
@@ -107,6 +114,34 @@
     }
     .chip.loc { color: #cdd6e6; }
     .chip.foll { color: #ffd6a5; }
+    .email {
+      display: flex; align-items: center; gap: 7px; margin-top: 9px;
+      font-size: 13px; min-width: 0;
+    }
+    .email svg { width: 15px; height: 15px; color: var(--muted); flex-shrink: 0; }
+    .email a {
+      color: #9be59b; text-decoration: none; font-weight: 600;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .email a:hover { text-decoration: underline; }
+    .email.none { color: var(--muted); font-style: italic; }
+    .email .copy {
+      display: inline-flex; align-items: center; justify-content: center;
+      width: 26px; height: 26px; padding: 0; flex-shrink: 0; cursor: pointer;
+      border-radius: 7px; border: 1px solid var(--border);
+      background: var(--bg-soft); color: var(--muted);
+      transition: color .12s, border-color .12s, background .12s;
+    }
+    .email .copy svg { width: 14px; height: 14px; }
+    .email .copy:hover { color: #fff; border-color: #33405c; background: var(--card-hover); }
+    .email .copy.copied { color: #9be59b; border-color: #9be59b; }
+    .src {
+      font-size: 10px; letter-spacing: .3px; text-transform: uppercase;
+      padding: 2px 7px; border-radius: 999px; font-weight: 700; flex-shrink: 0;
+    }
+    .src.profile { background: rgba(155,229,155,.16); color: #9be59b; }  /* highest trust */
+    .src.commit  { background: rgba(110,168,254,.16); color: var(--accent); }
+    .src.bio     { background: rgba(255,214,165,.16); color: #ffd6a5; }  /* lowest trust */
     .links { display: flex; gap: 8px; margin-top: 9px; flex-wrap: wrap; }
     .links a {
       display: inline-flex; align-items: center; gap: 5px; text-decoration: none;
@@ -171,6 +206,10 @@
         <div class="logo">GT</div>
         <div><h1>Github Track</h1><span>USA users & collaborators</span></div>
       </div>
+      <nav class="nav">
+        <a href="/index.html" class="active">Users</a>
+        <a href="/email.html">Email</a>
+      </nav>
       <label class="field">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/>
@@ -251,11 +290,20 @@
           <svg viewBox="0 0 24 24" fill="currentColor"><path d="M22 3 2 11l6 2 2 6 3-4 5 4z"/></svg>
           Telegram</a>`);
       }
-      if (u.email) {
-        links.push(`<a class="mail" href="mailto:${esc(u.email)}">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="m2 6 10 7L22 6"/></svg>
-          Email</a>`);
-      }
+      // Email is shown as its own visible address row below (not a link button).
+      const srcBadge = u.email && u.email_source
+        ? `<span class="src ${esc(u.email_source)}" title="Email source: ${esc(u.email_source)}">${esc(u.email_source)}</span>`
+        : '';
+      const emailRow = u.email
+        ? `<div class="email">
+             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="m2 6 10 7L22 6"/></svg>
+             <a href="mailto:${esc(u.email)}" title="Send email">${esc(u.email)}</a>
+             <button class="copy" type="button" data-email="${esc(u.email)}" title="Copy email" aria-label="Copy email">
+               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+             </button>
+             ${srcBadge}
+           </div>`
+        : `<div class="email none">no email found</div>`;
 
       el.innerHTML = `
         <img class="avatar" loading="lazy" src="${esc(u.avatar_url || '')}" alt="" />
@@ -269,6 +317,7 @@
             ${loc}
             <span class="chip foll">★ ${(u.followers ?? 0).toLocaleString()} followers</span>
           </div>
+          ${emailRow}
           <div class="links">${links.join('')}</div>
         </div>`;
       return el;
@@ -359,6 +408,33 @@
       debounce = setTimeout(() => { state.q = searchEl.value.trim(); state.page = 1; load(); }, 300);
     });
     sortEl.addEventListener('change', () => { state.sort = sortEl.value; state.page = 1; load(); });
+
+    // Copy an email to the clipboard (event-delegated — cards are re-rendered each page).
+    async function copyText(text) {
+      try {
+        await navigator.clipboard.writeText(text);
+        return true;
+      } catch {
+        // Fallback for non-secure contexts (e.g. plain http on a LAN IP).
+        const ta = document.createElement('textarea');
+        ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+        document.body.appendChild(ta); ta.select();
+        let ok = false;
+        try { ok = document.execCommand('copy'); } catch { ok = false; }
+        ta.remove();
+        return ok;
+      }
+    }
+    grid.addEventListener('click', async (e) => {
+      const btn = e.target.closest('.copy');
+      if (!btn) return;
+      const ok = await copyText(btn.dataset.email);
+      if (!ok) return;
+      btn.classList.add('copied');
+      const original = btn.innerHTML;
+      btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M20 6 9 17l-5-5"/></svg>';
+      setTimeout(() => { btn.classList.remove('copied'); btn.innerHTML = original; }, 1200);
+    });
 
     // Open every user on the current page in a new tab, then advance a page.
     // Uses the recursive window.open() pattern (same approach as the GitHub bookmarklet).

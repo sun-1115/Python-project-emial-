@@ -1,0 +1,390 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Github Track — Email Bot</title>
+  <style>
+    :root {
+      --bg: #0b0e14; --bg-soft: #11151f; --card: #151a26; --card-hover: #1b2233;
+      --border: #232a3b; --text: #e7ecf3; --muted: #8b95a7; --accent: #6ea8fe;
+      --accent-2: #a78bfa; --chip: #1e2536; --radius: 14px;
+      --ok: #9be59b; --warn: #ffd6a5; --bad: #ff8f9c;
+    }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; }
+    body {
+      margin: 0; color: var(--text);
+      font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Inter, sans-serif;
+      background:
+        radial-gradient(1200px 600px at 15% -10%, #1a2036 0%, transparent 60%),
+        radial-gradient(1000px 500px at 100% 0%, #1a1730 0%, transparent 55%), var(--bg);
+      background-attachment: fixed;
+    }
+    header {
+      position: sticky; top: 0; z-index: 20; backdrop-filter: blur(10px);
+      background: rgba(11, 14, 20, 0.72); border-bottom: 1px solid var(--border);
+    }
+    .bar { max-width: 1240px; margin: 0 auto; padding: 16px 24px; display: flex; gap: 14px; align-items: center; flex-wrap: wrap; }
+    .brand { display: flex; align-items: center; gap: 10px; margin-right: 8px; }
+    .logo {
+      width: 30px; height: 30px; border-radius: 9px;
+      background: linear-gradient(135deg, var(--accent), var(--accent-2));
+      display: grid; place-items: center; font-weight: 800; color: #0b0e14;
+    }
+    .brand h1 { font-size: 17px; margin: 0; letter-spacing: .2px; }
+    .brand span { color: var(--muted); font-size: 12px; display: block; margin-top: -2px; }
+    nav { display: flex; gap: 6px; margin-left: 6px; }
+    nav a {
+      text-decoration: none; color: var(--muted); font-size: 14px; font-weight: 600;
+      padding: 8px 14px; border-radius: 10px; border: 1px solid transparent;
+    }
+    nav a:hover { color: var(--text); background: var(--bg-soft); }
+    nav a.active { color: #0b0e14; background: linear-gradient(135deg, var(--accent), var(--accent-2)); }
+    .spacer { flex: 1; }
+    .runctl { display: inline-flex; align-items: center; gap: 10px; }
+    .runstate { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; }
+    .runstate .dot { width: 9px; height: 9px; border-radius: 50%; }
+    .runstate.on { color: var(--ok); } .runstate.on .dot { background: var(--ok); box-shadow: 0 0 0 4px rgba(155,229,155,.15); }
+    .runstate.off { color: var(--muted); } .runstate.off .dot { background: var(--muted); }
+    .runbtn {
+      cursor: pointer; font-size: 14px; font-weight: 700; padding: 10px 18px; border-radius: 11px;
+      border: 1px solid transparent; color: #0b0e14; transition: filter .12s, transform .1s;
+    }
+    .runbtn:hover { filter: brightness(1.08); } .runbtn:active { transform: translateY(1px); }
+    .runbtn:disabled { opacity: .5; cursor: not-allowed; }
+    .runbtn.start { background: linear-gradient(135deg, #6fcf7f, var(--ok)); }
+    .runbtn.stop { background: linear-gradient(135deg, #ff8f9c, #ff6b7d); }
+    .window {
+      display: inline-flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600;
+      padding: 8px 14px; border-radius: 999px; border: 1px solid var(--border); background: var(--bg-soft);
+    }
+    .dot { width: 9px; height: 9px; border-radius: 50%; }
+    .window.open .dot { background: var(--ok); box-shadow: 0 0 0 4px rgba(155,229,155,.15); }
+    .window.closed .dot { background: var(--muted); }
+    .window.open { color: var(--ok); }
+    .window small { color: var(--muted); font-weight: 500; }
+
+    main { max-width: 1240px; margin: 0 auto; padding: 24px; }
+
+    .cards { display: grid; grid-template-columns: repeat(6, 1fr); gap: 14px; margin-bottom: 22px; }
+    @media (max-width: 900px) { .cards { grid-template-columns: repeat(2, 1fr); } }
+    .stat {
+      padding: 16px 18px; border-radius: var(--radius); border: 1px solid var(--border);
+      background: linear-gradient(180deg, var(--card), var(--bg-soft));
+    }
+    .stat .label { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .4px; }
+    .stat .value { font-size: 28px; font-weight: 800; margin-top: 6px; }
+    .stat .value.ok { color: var(--ok); } .stat .value.warn { color: var(--warn); } .stat .value.bad { color: var(--bad); }
+
+    h2 { font-size: 15px; letter-spacing: .3px; color: var(--muted); text-transform: uppercase; margin: 26px 0 12px; }
+
+    .panel { border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; background: var(--card); }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { text-align: left; padding: 12px 16px; font-size: 14px; border-bottom: 1px solid var(--border); }
+    th { color: var(--muted); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: .3px; }
+    tr:last-child td { border-bottom: none; }
+    tr:hover td { background: var(--card-hover); }
+    .acct { font-weight: 700; }
+    .age { color: var(--muted); font-size: 12px; }
+    .prog { display: flex; align-items: center; gap: 10px; min-width: 180px; }
+    .track { flex: 1; height: 8px; border-radius: 999px; background: var(--chip); overflow: hidden; }
+    .fill { height: 100%; border-radius: 999px; background: linear-gradient(90deg, var(--accent), var(--accent-2)); }
+    .fill.full { background: linear-gradient(90deg, var(--ok), #6fcf7f); }
+    .prog .num { font-variant-numeric: tabular-nums; font-size: 13px; color: var(--muted); white-space: nowrap; }
+    .badge { font-size: 11px; font-weight: 700; padding: 3px 9px; border-radius: 999px; text-transform: uppercase; letter-spacing: .3px; }
+    .badge.active { background: rgba(155,229,155,.16); color: var(--ok); }
+    .badge.paused { background: rgba(255,143,156,.16); color: var(--bad); }
+    .toggle {
+      cursor: pointer; font-size: 13px; font-weight: 600; padding: 7px 12px; border-radius: 9px;
+      border: 1px solid var(--border); background: var(--bg-soft); color: var(--text);
+      transition: border-color .12s, background .12s;
+    }
+    .toggle:hover { border-color: #33405c; background: var(--card-hover); }
+    .muted { color: var(--muted); }
+
+    .feed { list-style: none; margin: 0; padding: 0; }
+    .feed li { display: flex; align-items: center; gap: 12px; padding: 11px 16px; border-bottom: 1px solid var(--border); font-size: 13.5px; }
+    .feed li:last-child { border-bottom: none; }
+    .feed .st { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+    .feed .st.sent { background: var(--ok); } .feed .st.error { background: var(--bad); }
+    .feed .to { font-weight: 600; }
+    .feed .by { color: var(--accent); }
+    .feed .err { color: var(--bad); }
+    .feed .when { margin-left: auto; color: var(--muted); font-size: 12px; white-space: nowrap; }
+    #status { text-align: center; color: var(--muted); padding: 40px; }
+    .empty { text-align: center; color: var(--muted); padding: 28px; }
+
+    /* Suppression list */
+    .supp-add { display: flex; gap: 10px; padding: 16px; border-bottom: 1px solid var(--border); align-items: flex-start; }
+    .supp-add textarea {
+      flex: 1; min-height: 44px; resize: vertical; padding: 11px 13px; border-radius: 11px;
+      border: 1px solid var(--border); background: var(--bg-soft); color: inherit; outline: none;
+      font: inherit; transition: border-color .15s, box-shadow .15s;
+    }
+    .supp-add textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(110,168,254,.15); }
+    .btn {
+      display: inline-flex; align-items: center; gap: 7px; cursor: pointer; white-space: nowrap;
+      padding: 11px 16px; border-radius: 11px; border: 1px solid transparent; font: inherit; font-weight: 700;
+      background: linear-gradient(135deg, var(--accent), var(--accent-2)); color: #0b0e14;
+      transition: filter .12s, transform .1s;
+    }
+    .btn:hover { filter: brightness(1.08); } .btn:active { transform: translateY(1px); }
+    .btn:disabled { opacity: .5; cursor: not-allowed; }
+    .supp-list { list-style: none; margin: 0; padding: 0; max-height: 340px; overflow-y: auto; }
+    .supp-list li { display: flex; align-items: center; gap: 12px; padding: 10px 16px; border-bottom: 1px solid var(--border); font-size: 13.5px; }
+    .supp-list li:last-child { border-bottom: none; }
+    .supp-list .addr { font-weight: 600; }
+    .supp-list .reason { font-size: 11px; padding: 2px 8px; border-radius: 999px; background: var(--chip); color: var(--muted); border: 1px solid var(--border); }
+    .supp-list .when { margin-left: auto; color: var(--muted); font-size: 12px; white-space: nowrap; }
+    .supp-list .rm {
+      cursor: pointer; border: 1px solid var(--border); background: var(--bg-soft); color: var(--muted);
+      width: 28px; height: 28px; border-radius: 8px; font-size: 16px; line-height: 1; flex-shrink: 0;
+      transition: color .12s, border-color .12s, background .12s;
+    }
+    .supp-list .rm:hover { color: var(--bad); border-color: var(--bad); background: var(--card-hover); }
+    .hint { color: var(--muted); font-size: 12px; padding: 0 16px 14px; }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="bar">
+      <div class="brand">
+        <div class="logo">GT</div>
+        <div><h1>Github Track</h1><span>Email bot dashboard</span></div>
+      </div>
+      <nav>
+        <a href="/index.html">Users</a>
+        <a href="/email.html" class="active">Email</a>
+      </nav>
+      <div class="spacer"></div>
+      <div class="runctl">
+        <span id="runState" class="runstate off"><span class="dot"></span><span id="runStateText">Stopped</span></span>
+        <button id="runBtn" class="runbtn start">Start sending</button>
+      </div>
+      <div id="window" class="window closed"><span class="dot"></span><span id="windowText">—</span></div>
+    </div>
+  </header>
+
+  <main>
+    <div class="cards" id="cards"></div>
+
+    <h2>Accounts</h2>
+    <div class="panel"><table>
+      <thead><tr><th>Account</th><th>Today</th><th>Status</th><th>Lifetime</th><th>Last send</th><th></th></tr></thead>
+      <tbody id="accounts"></tbody>
+    </table></div>
+
+    <h2>Recent activity</h2>
+    <div class="panel"><ul class="feed" id="feed"></ul></div>
+
+    <h2>Do-not-email list <span id="suppCount" class="muted"></span></h2>
+    <div class="panel">
+      <div class="supp-add">
+        <textarea id="suppInput" placeholder="Paste addresses to suppress (one per line, or comma-separated)…"></textarea>
+        <button id="suppAdd" class="btn">Add</button>
+      </div>
+      <div class="hint">Suppressed addresses are never emailed. Add anyone who replies “unsubscribe”, plus hard bounces.</div>
+      <ul class="supp-list" id="suppList"></ul>
+    </div>
+
+    <div id="status"></div>
+  </main>
+
+  <script>
+    const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) =>
+      ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+    const cardsEl = document.getElementById('cards');
+    const accountsEl = document.getElementById('accounts');
+    const feedEl = document.getElementById('feed');
+    const windowEl = document.getElementById('window');
+    const windowText = document.getElementById('windowText');
+    const statusEl = document.getElementById('status');
+
+    function ago(iso) {
+      if (!iso) return 'never';
+      const then = new Date(iso.replace(' ', 'T') + 'Z').getTime();
+      const s = Math.max(0, Math.floor((Date.now() - then) / 1000));
+      if (s < 60) return s + 's ago';
+      if (s < 3600) return Math.floor(s / 60) + 'm ago';
+      if (s < 86400) return Math.floor(s / 3600) + 'h ago';
+      return Math.floor(s / 86400) + 'd ago';
+    }
+    const nf = (n) => Number(n).toLocaleString();
+
+    function statCard(label, value, cls) {
+      return `<div class="stat"><div class="label">${label}</div><div class="value ${cls || ''}">${value}</div></div>`;
+    }
+
+    function renderCards(d) {
+      cardsEl.innerHTML = [
+        statCard('Sent today', nf(d.totals.sentToday), 'ok'),
+        statCard('Capacity left today', nf(d.totals.capacityToday)),
+        statCard('Total sent', nf(d.totals.sent)),
+        statCard('Errors', nf(d.totals.error), d.totals.error ? 'bad' : ''),
+        statCard('Unsent recipients', nf(d.totals.unsent), 'warn'),
+        statCard('Suppressed', nf(d.totals.suppressed ?? 0), d.totals.suppressed ? 'bad' : ''),
+      ].join('');
+    }
+
+    const runState = document.getElementById('runState');
+    const runStateText = document.getElementById('runStateText');
+    const runBtn = document.getElementById('runBtn');
+    let campaignRunning = false;
+
+    function renderCampaign(c) {
+      campaignRunning = c.running;
+      runState.className = 'runstate ' + (c.running ? 'on' : 'off');
+      runStateText.textContent = c.running ? 'Sending' : (c.desired === 'on' ? 'Starting…' : 'Stopped');
+      runBtn.textContent = c.running ? 'Stop sending' : 'Start sending';
+      runBtn.className = 'runbtn ' + (c.running ? 'stop' : 'start');
+      runBtn.disabled = false;
+      if (c.lastError) { statusEl.textContent = 'Campaign error: ' + c.lastError; }
+    }
+
+    runBtn.addEventListener('click', async () => {
+      runBtn.disabled = true;
+      const action = campaignRunning ? 'stop' : 'start';
+      try {
+        await fetch('/api/email/campaign/' + action, { method: 'POST' });
+        await load();
+      } catch { runBtn.disabled = false; }
+    });
+
+    function renderWindow(w) {
+      const open = w.open;
+      windowEl.className = 'window ' + (open ? 'open' : 'closed');
+      windowText.innerHTML = open
+        ? `Window open <small>&nbsp;· ${esc(w.timezone)} ${w.startHour}:00–${w.endHour}:00</small>`
+        : `Window closed <small>&nbsp;· opens ${w.startHour}:00 ${esc(w.timezone)}, Mon–Fri</small>`;
+    }
+
+    function renderAccounts(accounts) {
+      if (!accounts.length) {
+        accountsEl.innerHTML = `<tr><td colspan="6" class="empty">No authorized accounts yet. Run <code>npm run email:auth -- --account &lt;label&gt;</code>.</td></tr>`;
+        return;
+      }
+      accountsEl.innerHTML = accounts.map((a) => {
+        const pct = a.cap > 0 ? Math.min(100, Math.round((a.sentToday / a.cap) * 100)) : 0;
+        const full = a.cap > 0 && a.sentToday >= a.cap;
+        const status = a.paused
+          ? '<span class="badge paused">paused</span>'
+          : '<span class="badge active">active</span>';
+        return `<tr>
+          <td><div class="acct">${esc(a.label)}</div><div class="age">day ${a.ageDays} · cap ${a.cap}/day</div></td>
+          <td><div class="prog">
+            <div class="track"><div class="fill ${full ? 'full' : ''}" style="width:${pct}%"></div></div>
+            <span class="num">${a.sentToday}/${a.cap}</span>
+          </div></td>
+          <td>${status}</td>
+          <td>${nf(a.totalSent)}</td>
+          <td class="muted">${ago(a.lastSent)}</td>
+          <td><button class="toggle" data-label="${esc(a.label)}" data-paused="${a.paused}">${a.paused ? 'Resume' : 'Pause'}</button></td>
+        </tr>`;
+      }).join('');
+    }
+
+    function renderFeed(recent) {
+      if (!recent.length) { feedEl.innerHTML = `<li class="empty">No sends yet.</li>`; return; }
+      feedEl.innerHTML = recent.map((r) => {
+        const who = r.login ? '@' + esc(r.login) : esc(r.to_email);
+        const detail = r.status === 'error'
+          ? `<span class="err">${esc(r.error || 'error')}</span>`
+          : `to <span class="to">${esc(r.to_email)}</span>`;
+        const by = r.from_account ? ` <span class="by">via ${esc(r.from_account)}</span>` : '';
+        return `<li>
+          <span class="st ${esc(r.status)}"></span>
+          <span>${detail}${by}</span>
+          <span class="when">${ago(r.sent_at)}</span>
+        </li>`;
+      }).join('');
+    }
+
+    async function load() {
+      try {
+        const res = await fetch('/api/email/overview');
+        const d = await res.json();
+        if (d.campaign) renderCampaign(d.campaign);
+        renderWindow(d.window);
+        renderCards(d);
+        renderAccounts(d.accounts);
+        renderFeed(d.recent);
+        statusEl.textContent = '';
+      } catch (e) {
+        statusEl.textContent = 'Error loading dashboard.';
+      }
+    }
+
+    // --- Suppression list ---
+    const suppList = document.getElementById('suppList');
+    const suppInput = document.getElementById('suppInput');
+    const suppAdd = document.getElementById('suppAdd');
+    const suppCount = document.getElementById('suppCount');
+
+    function renderSupp(data) {
+      suppCount.textContent = data.count ? `· ${nf(data.count)}` : '';
+      if (!data.items.length) { suppList.innerHTML = `<li class="empty">Nobody suppressed yet.</li>`; return; }
+      suppList.innerHTML = data.items.map((s) => `<li>
+        <span class="addr">${esc(s.email)}</span>
+        <span class="reason">${esc(s.reason || 'manual')}</span>
+        <span class="when">${ago(s.added_at)}</span>
+        <button class="rm" data-email="${esc(s.email)}" title="Remove">×</button>
+      </li>`).join('');
+    }
+
+    async function loadSupp() {
+      try {
+        const res = await fetch('/api/email/suppressions');
+        renderSupp(await res.json());
+      } catch {}
+    }
+
+    suppAdd.addEventListener('click', async () => {
+      const emails = suppInput.value.trim();
+      if (!emails) return;
+      suppAdd.disabled = true;
+      try {
+        const res = await fetch('/api/email/suppressions', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ emails }),
+        });
+        const r = await res.json();
+        if (r.error) { statusEl.textContent = r.error; }
+        else { suppInput.value = ''; await loadSupp(); await load(); }
+      } finally { suppAdd.disabled = false; }
+    });
+
+    suppList.addEventListener('click', async (e) => {
+      const btn = e.target.closest('.rm');
+      if (!btn) return;
+      btn.disabled = true;
+      try {
+        await fetch('/api/email/suppressions/' + encodeURIComponent(btn.dataset.email), { method: 'DELETE' });
+        await loadSupp(); await load();
+      } catch { btn.disabled = false; }
+    });
+
+    accountsEl.addEventListener('click', async (e) => {
+      const btn = e.target.closest('.toggle');
+      if (!btn) return;
+      btn.disabled = true;
+      const label = btn.dataset.label;
+      const paused = btn.dataset.paused !== 'true'; // flip
+      try {
+        await fetch(`/api/email/accounts/${encodeURIComponent(label)}/pause`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ paused }),
+        });
+        await load();
+      } catch { btn.disabled = false; }
+    });
+
+    load();
+    loadSupp();
+    setInterval(load, 15000); // live refresh
+  </script>
+</body>
+</html>
