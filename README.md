@@ -1,7 +1,7 @@
 # Github Track
 
 Discovers GitHub users and stores them in a local **SQLite** database, then lets you
-browse them in a web UI. It starts from a USA-focused search, then **expands through
+browse them in a web UI. It starts from a UK-focused search, then **expands through
 repositories** — for each user it looks at their non-fork repos and saves everyone who
 contributed to them (the people they collaborate with).
 
@@ -39,14 +39,14 @@ npm run ui        # then open http://localhost:3000
 ## How it works
 1. **Seed search.** Builds a faceted list of GitHub searches — one per
    `location × language` (see `buildQueries` in `src/config.ts`). Faceting beats
-   GitHub's 1,000-results-per-query cap and covers the whole US broadly.
+   GitHub's 1,000-results-per-query cap and covers the whole UK broadly.
 2. **Repository expansion (1 hop).** For each seed user it lists their **non-fork**
    repositories, then each repo's **contributors** — the other users they collaborate
    with. Forks are skipped. It does *not* then crawl those contributors' repos (no recursion).
-3. **Save USA + unknown-location users.** Every discovered user — seeds *and*
+3. **Save UK + unknown-location users.** Every discovered user — seeds *and*
    contributors — is upserted into the single `users` table (keyed by username),
-   **but only if their location is empty or looks like the USA**; clearly-foreign
-   locations are dropped (see `isUsOrEmpty` in `src/location.ts`). `discovered_via`
+   **but only if their location is empty or looks like the UK**; clearly-foreign
+   locations are dropped (see `isUkOrEmpty` in `src/location.ts`). `discovered_via`
    records whether a user came from `search` or as a `contributor`. Rate limits are
    handled automatically; hard caps (`MAX_*`) keep a run bounded.
 

@@ -33,13 +33,79 @@ export function spin(text: string): string {
   return out;
 }
 
+// --- Name hygiene -----------------------------------------------------------
+// GitHub's "name" field is free text, so it arrives full of things you must not
+// greet someone with: honorifics, credentials, nicknames in parentheses, emoji,
+// job titles, company names, handles. "Hi Elizabeth (Liz) A. O'Gorman, Ph.D."
+// reads as a mail merge; "Hi Elizabeth" reads as a person. cleanName() reduces a
+// profile name to a greetable one, and returns '' when the value isn't a human
+// name at all — the caller then falls back to `{{name|there}}`.
+
+const TITLE_RE = /^(dr|mr|mrs|ms|miss|mx|prof|professor|sir|madam|rev|fr|capt|lt|sgt)\.?$/i;
+const SUFFIX_RE =
+  /^(ph\.?d|d\.?phil|m\.?d|d\.?d\.?s|d\.?v\.?m|jr|snr|sr|ii|iii|iv|v|esq|mba|m\.?sc|m\.?s|m\.?a|b\.?sc|b\.?s|b\.?a|pmp|cpa|cfa|rn|np|do|jd|ed\.?d|psy\.?d|p\.?e|pe|cissp|ocp|mcse)\.?$/i;
+// Words that mean the value is a company / role / label rather than a person.
+const NON_NAME_RE =
+  /\b(inc|llc|ltd|limited|gmbh|s\.?a|b\.?v|n\.?v|corp|corporation|company|holdings|group|team|labs?|studio|software|technolog\w*|solutions?|systems?|services?|consulting|agency|media|digital|official|bot|dev|devs|developer|engineer|engineering|programmer|designer|freelancer|founder|ceo|cto|cofounder|student|university|college|school|institute|foundation|community|network|opensource|admin|support|hire|hiring)\b/i;
+
+/** Title-case a token while preserving intentional inner caps (McRae, DeSoto). */
+function fixCase(token: string): string {
+  const hasInnerCaps = /[a-z][A-Z]/.test(token);
+  if (hasInnerCaps) return token; // McRae, DeSoto — leave alone
+  const lower = token.toLowerCase();
+  // Capitalize after the start and after each apostrophe / hyphen: o'gorman → O'Gorman.
+  return lower.replace(/(^|['’\-])(\p{L})/gu, (_m, sep: string, ch: string) => sep + ch.toUpperCase());
+}
+
+/**
+ * Reduce a raw profile name to a name you can safely greet someone with, or ''
+ * when it doesn't look like a personal name.
+ *
+ *   "Elizabeth (Liz) A. O'Gorman, Ph.D." → "Elizabeth O'Gorman"
+ *   "Dr. JOHN SMITH JR."                 → "John Smith"
+ *   "sun wu | Software Engineer"         → "Sun Wu"
+ *   "Acme Labs", "🚀", "me@x.com", "x1"  → ""
+ */
+export function cleanName(raw: string | null | undefined): string {
+  if (!raw) return '';
+  let s = String(raw).normalize('NFC');
+  s = s.replace(/[\p{Extended_Pictographic}\p{So}\p{Sk}]/gu, ' '); // emoji / symbols
+  // A tagline after a separator ("Name | Title", "Name @ Co") is not part of the name.
+  s = s.split(/\s*[|/\\·•—–]\s*|\s+@\s*|\s+[-–]\s+/)[0];
+  s = s.replace(/\([^)]*\)|\[[^\]]*\]|\{[^}]*\}|"[^"]*"|“[^”]*”/g, ' '); // (Liz), "Liz"
+  s = s.replace(/,/g, ' ');
+
+  let tokens = s.split(/\s+/).filter(Boolean);
+  while (tokens.length && TITLE_RE.test(tokens[0])) tokens.shift(); // Dr. Prof.
+  while (tokens.length && SUFFIX_RE.test(tokens[tokens.length - 1])) tokens.pop(); // Ph.D. Jr.
+  // Middle initials ("A." / "A") add nothing to a greeting.
+  tokens = tokens.filter((t, i) => !(i > 0 && i < tokens.length - 1 && /^\p{L}\.?$/u.test(t)));
+
+  // A role/company word tacked onto a name ("John Doe CTO") ends the name; the
+  // same word at the very start means the whole value is a label, not a person.
+  const label = tokens.findIndex((t) => NON_NAME_RE.test(t));
+  if (label >= 0) tokens = label >= 2 ? tokens.slice(0, label) : [];
+
+  if (tokens.length === 0 || tokens.length > 4) return '';
+  // Every token must be a word: letters plus the punctuation real names use.
+  // This alone rejects emails, URLs, handles and anything with digits.
+  const isWord = (t: string) => /^\p{L}[\p{L}\p{M}'’.-]*$/u.test(t);
+  if (!tokens.every(isWord)) return '';
+
+  const joined = tokens.join(' ');
+  if (joined.replace(/[^\p{L}]/gu, '').length < 2) return ''; // "X", "A."
+  if (joined.length > 40) return '';
+
+  return tokens.map(fixCase).join(' ');
+}
+
 /** Resolve one placeholder field to its raw value ('' when unknown/empty). */
 function fieldValue(key: string, r: Recipient): string {
   switch (key.toLowerCase()) {
     case 'name':
-      return r.name?.trim() || '';
+      return cleanName(r.name);
     case 'firstname':
-      return r.name?.trim().split(/\s+/)[0] || '';
+      return cleanName(r.name).split(' ')[0] || '';
     case 'login':
       return r.login;
     default:
@@ -52,7 +118,9 @@ const FIELD_RE = /\{\{\s*([a-zA-Z]+)\s*(?:\|([^}]*))?\}\}/g;
 
 /**
  * Fill placeholders, then resolve spintax. Supported fields: name, firstName,
- * login. A `|fallback` gives the text to use when the field is empty, e.g.
+ * login. `name`/`firstName` are passed through cleanName(), so an unusable
+ * profile name ("Acme Labs", "🚀", an email address) counts as empty and takes
+ * the fallback. A `|fallback` gives the text to use when the field is empty, e.g.
  * `{{name|there}}` → the name, or "there" for recipients with no name. Without a
  * fallback, `{{name}}` falls back to the login (kept for backward compatibility).
  */
@@ -66,15 +134,62 @@ export function fillTemplate(template: string, r: Recipient): string {
   return spin(filled);
 }
 
+/** Greeting prepended to every message at send time, so the templates stay
+ *  greeting-free. Override with EMAIL_GREETING (set it empty to disable). */
+export const DEFAULT_GREETING =
+  process.env.EMAIL_GREETING ?? 'Hi {{name|there}},';
+
+/** True if the text already opens with a greeting — don't add a second one. */
+const HAS_GREETING_RE = /^\s*(hi|hello|hey|dear|greetings|good\s+(morning|afternoon|evening))\b/i;
+
 /**
- * Build the final body: personalized + spun template, with the unsubscribe
- * footer appended unless the template already contains "unsubscribe".
+ * Build the final body: greeting + personalized/spun template, with the
+ * unsubscribe footer appended unless the template already contains
+ * "unsubscribe".
  */
-export function buildBody(template: string, r: Recipient, unsubscribe = DEFAULT_UNSUBSCRIBE): string {
-  const body = fillTemplate(template, r);
+export function buildBody(
+  template: string,
+  r: Recipient,
+  unsubscribe = DEFAULT_UNSUBSCRIBE,
+  greeting = DEFAULT_GREETING
+): string {
+  let body = fillTemplate(template, r);
+  const hello = fillTemplate(greeting, r).trim();
+  if (hello && !HAS_GREETING_RE.test(body)) body = `${hello}\n\n${body}`;
   const footer = spin(unsubscribe).trim();
   if (!footer || /unsubscribe/i.test(body)) return body;
   return `${body}\n\n${footer}`;
+}
+
+// --- HTML rendering ---------------------------------------------------------
+// Sent as text/plain only, Gmail renders the message in its plain-text style: a
+// narrow fixed-width column with hard wraps mid-sentence. Pairing the same text
+// with a text/html part makes it render like a normal email — proper paragraphs
+// that reflow to the reader's window. The markup is deliberately minimal
+// (paragraphs + one inline font rule); image-heavy or table-based HTML is a
+// spam signal, and clients that prefer plain text still get the text part.
+
+const HTML_ESCAPES: Record<string, string> = {
+  '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+};
+const escapeHtml = (s: string): string => s.replace(/[&<>"']/g, (c) => HTML_ESCAPES[c]);
+
+/** Render the plain-text body as simple HTML: blank line = paragraph, single
+ *  newline = line break. Escapes everything — templates are plain text. */
+export function textToHtml(text: string): string {
+  const paragraphs = text
+    .replace(/\r\n/g, '\n')
+    .split(/\n{2,}/)
+    .map((block) => block.trim())
+    .filter(Boolean)
+    .map((block) => `  <p style="margin:0 0 14px;">${escapeHtml(block).split('\n').join('<br>')}</p>`)
+    .join('\n');
+  return (
+    '<div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;' +
+    'line-height:1.6;color:#202124;">\n' +
+    paragraphs +
+    '\n</div>'
+  );
 }
 
 // --- Message templates (a folder of variants, one chosen at random per send) ---

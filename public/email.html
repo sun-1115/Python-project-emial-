@@ -47,6 +47,7 @@
     .runstate .dot { width: 9px; height: 9px; border-radius: 50%; }
     .runstate.on { color: var(--ok); } .runstate.on .dot { background: var(--ok); box-shadow: 0 0 0 4px rgba(155,229,155,.15); }
     .runstate.off { color: var(--muted); } .runstate.off .dot { background: var(--muted); }
+    .runstate.wait { color: var(--warn); } .runstate.wait .dot { background: var(--warn); box-shadow: 0 0 0 4px rgba(255,214,165,.15); }
     .runbtn {
       cursor: pointer; font-size: 14px; font-weight: 700; padding: 10px 18px; border-radius: 11px;
       border: 1px solid transparent; color: #0b0e14; transition: filter .12s, transform .1s;
@@ -95,6 +96,34 @@
     .badge { font-size: 11px; font-weight: 700; padding: 3px 9px; border-radius: 999px; text-transform: uppercase; letter-spacing: .3px; }
     .badge.active { background: rgba(155,229,155,.16); color: var(--ok); }
     .badge.paused { background: rgba(255,143,156,.16); color: var(--bad); }
+    .badge.tok-ok { background: rgba(155,229,155,.16); color: var(--ok); }
+    .badge.tok-bad { background: rgba(255,143,156,.16); color: var(--bad); }
+
+    .alert {
+      display: flex; align-items: center; gap: 12px; margin-bottom: 18px; padding: 14px 18px;
+      border-radius: var(--radius); border: 1px solid rgba(255,143,156,.4);
+      background: rgba(255,143,156,.10); color: var(--text); font-size: 14px;
+    }
+    .alert .ico { font-size: 18px; }
+    .alert b { color: var(--bad); }
+    .alert .grow { flex: 1; }
+    .banner-btn {
+      cursor: pointer; white-space: nowrap; font: inherit; font-weight: 700; font-size: 13px;
+      padding: 9px 16px; border-radius: 10px; border: 1px solid transparent; color: #0b0e14;
+      background: linear-gradient(135deg, #ffd6a5, #ffb26b); transition: filter .12s, transform .1s;
+    }
+    .banner-btn:hover { filter: brightness(1.06); } .banner-btn:active { transform: translateY(1px); }
+    .banner-btn:disabled { opacity: .6; cursor: not-allowed; }
+    .sec-head { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+    .sec-head h2 { margin: 26px 0 12px; }
+    .add-acct { margin-left: auto; display: flex; gap: 8px; align-items: center; }
+    .acct-input {
+      padding: 8px 12px; border-radius: 9px; border: 1px solid var(--border);
+      background: var(--bg-soft); color: inherit; font: inherit; font-size: 13px; outline: none; width: 220px;
+    }
+    .acct-input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(110,168,254,.15); }
+    .toggle.reauth { border-color: rgba(255,214,165,.5); color: var(--warn); }
+    .toggle.reauth:hover { border-color: var(--warn); }
     .toggle {
       cursor: pointer; font-size: 13px; font-weight: 600; padding: 7px 12px; border-radius: 9px;
       border: 1px solid var(--border); background: var(--bg-soft); color: var(--text);
@@ -167,11 +196,19 @@
   </header>
 
   <main>
+    <div id="tokenAlert" class="alert" hidden></div>
+
     <div class="cards" id="cards"></div>
 
-    <h2>Accounts</h2>
+    <div class="sec-head">
+      <h2>Accounts</h2>
+      <div class="add-acct">
+        <input id="newAcct" class="acct-input" placeholder="new account label (e.g. alice)" />
+        <button id="addAcct" class="toggle">+ Add / authorize account</button>
+      </div>
+    </div>
     <div class="panel"><table>
-      <thead><tr><th>Account</th><th>Today</th><th>Status</th><th>Lifetime</th><th>Last send</th><th></th></tr></thead>
+      <thead><tr><th>Account</th><th>Today</th><th>Status</th><th>Token</th><th>Lifetime</th><th>Last send</th><th></th></tr></thead>
       <tbody id="accounts"></tbody>
     </table></div>
 
@@ -233,10 +270,16 @@
     const runBtn = document.getElementById('runBtn');
     let campaignRunning = false;
 
-    function renderCampaign(c) {
+    function renderCampaign(c, w) {
       campaignRunning = c.running;
-      runState.className = 'runstate ' + (c.running ? 'on' : 'off');
-      runStateText.textContent = c.running ? 'Sending' : (c.desired === 'on' ? 'Starting…' : 'Stopped');
+      const catchup = w && w.catchup;         // sending past the window to finish the day
+      const windowClosed = w && !w.open && !catchup;
+      // The daemon stays alive 24/7; outside the send window it's napping, not
+      // sending. Say so, instead of misleadingly showing "Sending".
+      runState.className = 'runstate ' + (c.running ? (windowClosed ? 'wait' : 'on') : 'off');
+      runStateText.textContent = c.running
+        ? (catchup ? 'Catching up' : (windowClosed ? 'Waiting for window' : 'Sending'))
+        : (c.desired === 'on' ? 'Starting…' : 'Stopped');
       runBtn.textContent = c.running ? 'Stop sending' : 'Start sending';
       runBtn.className = 'runbtn ' + (c.running ? 'stop' : 'start');
       runBtn.disabled = false;
@@ -254,15 +297,21 @@
 
     function renderWindow(w) {
       const open = w.open;
+      if (!open && w.catchup) {
+        windowEl.className = 'window open';
+        windowText.innerHTML = `Catch-up <small>&nbsp;· finishing today’s quota, until ${w.catchupEndHour}:00 ${esc(w.timezone)}</small>`;
+        return;
+      }
       windowEl.className = 'window ' + (open ? 'open' : 'closed');
+      const ext = w.catchupEnabled ? ` (catch-up to ${w.catchupEndHour}:00)` : '';
       windowText.innerHTML = open
-        ? `Window open <small>&nbsp;· ${esc(w.timezone)} ${w.startHour}:00–${w.endHour}:00</small>`
-        : `Window closed <small>&nbsp;· opens ${w.startHour}:00 ${esc(w.timezone)}, Mon–Fri</small>`;
+        ? `Window open <small>&nbsp;· ${esc(w.timezone)} ${w.startHour}:00–${w.endHour}:00${ext}</small>`
+        : `Window closed <small>&nbsp;· opens ${w.startHour}:00 ${esc(w.timezone)}</small>`;
     }
 
     function renderAccounts(accounts) {
       if (!accounts.length) {
-        accountsEl.innerHTML = `<tr><td colspan="6" class="empty">No authorized accounts yet. Run <code>npm run email:auth -- --account &lt;label&gt;</code>.</td></tr>`;
+        accountsEl.innerHTML = `<tr><td colspan="7" class="empty">No authorized accounts yet. Add one above, or run <code>npm run email:auth -- --account &lt;label&gt;</code>.</td></tr>`;
         return;
       }
       accountsEl.innerHTML = accounts.map((a) => {
@@ -271,6 +320,12 @@
         const status = a.paused
           ? '<span class="badge paused">paused</span>'
           : '<span class="badge active">active</span>';
+        const tok = a.token || {};
+        const tokBadge = tok.ok
+          ? '<span class="badge tok-ok">valid</span>'
+          : `<span class="badge tok-bad" title="${esc(tok.error || 'token invalid')}">${tok.hasRefresh ? 'expired' : 'needs auth'}</span>`;
+        const reauth = `<button class="toggle reauth" data-auth="${esc(a.label)}">${tok.ok ? 'Re-auth' : 'Authorize'}</button>`;
+        const test = `<button class="toggle" data-test="${esc(a.label)}"${tok.ok ? '' : ' disabled title="Authorize this account first"'}>Test</button>`;
         return `<tr>
           <td><div class="acct">${esc(a.label)}</div><div class="age">day ${a.ageDays} · cap ${a.cap}/day</div></td>
           <td><div class="prog">
@@ -278,11 +333,76 @@
             <span class="num">${a.sentToday}/${a.cap}</span>
           </div></td>
           <td>${status}</td>
+          <td>${tokBadge}</td>
           <td>${nf(a.totalSent)}</td>
           <td class="muted">${ago(a.lastSent)}</td>
-          <td><button class="toggle" data-label="${esc(a.label)}" data-paused="${a.paused}">${a.paused ? 'Resume' : 'Pause'}</button></td>
+          <td style="white-space:nowrap">${reauth} ${test} <button class="toggle" data-label="${esc(a.label)}" data-paused="${a.paused}">${a.paused ? 'Resume' : 'Pause'}</button></td>
         </tr>`;
       }).join('');
+    }
+
+    const tokenAlert = document.getElementById('tokenAlert');
+    let expiredLabels = [];
+    function renderTokenAlert(d) {
+      const bad = (d.accounts || []).filter((a) => a.token && !a.token.ok);
+      expiredLabels = bad.map((a) => a.label);
+      if (!bad.length) { tokenAlert.hidden = true; return; }
+      const names = bad.map((a) => esc(a.label)).join(', ');
+      tokenAlert.hidden = false;
+      tokenAlert.innerHTML =
+        `<span class="ico">⚠️</span><span class="grow"><b>${bad.length} Gmail account${bad.length > 1 ? 's need' : ' needs'} re-authorization</b>` +
+        ` — sending from ${names} will fail until re-authorized (Google test-mode tokens expire after 7 days).</span>` +
+        `<button class="banner-btn" data-authall>🔑 Fix expired token${bad.length > 1 ? 's' : ''} (${bad.length})</button>`;
+    }
+
+    // One button that walks through every expired account: authorize the first
+    // one now; after you approve and it turns valid, click again for the next.
+    tokenAlert.addEventListener('click', (e) => {
+      if (!e.target.closest('[data-authall]')) return;
+      const next = expiredLabels[0];
+      if (next) startAuth(next);
+    });
+
+    // Open Google's consent screen for a label; the server callback saves the
+    // token, then we poll a few times so the dashboard reflects it quickly.
+    async function startAuth(label) {
+      try {
+        const res = await fetch(`/api/email/accounts/${encodeURIComponent(label)}/auth-url`);
+        const d = await res.json();
+        if (d.error) { statusEl.textContent = d.error; return; }
+        window.open(d.url, '_blank', 'noopener'); // approve in Google → redirects to /oauth2callback
+        statusEl.textContent = `Opened Google consent for “${label}”. Approve in the new tab — this dashboard updates automatically.`;
+        [3000, 6000, 10000, 15000].forEach((ms) => setTimeout(load, ms)); // pick up the new token fast
+      } catch { statusEl.textContent = 'Could not start authorization.'; }
+    }
+
+    // Send a one-off test email from an account to a recipient you choose
+    // (remembered between tests) to confirm it can actually send.
+    async function sendTest(btn) {
+      const label = btn.dataset.test;
+      const prev = localStorage.getItem('testRecipient') || '';
+      const to = (window.prompt(`Send a test email from “${label}” to:`, prev) || '').trim();
+      if (!to) return;
+      localStorage.setItem('testRecipient', to);
+      btn.disabled = true;
+      const old = btn.textContent;
+      btn.textContent = 'Sending…';
+      try {
+        const res = await fetch(`/api/email/accounts/${encodeURIComponent(label)}/test`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ to }),
+        });
+        const d = await res.json();
+        statusEl.textContent = d.ok
+          ? `✅ Test email sent from “${label}” to ${to}.`
+          : `❌ Test from “${label}” failed: ${d.error || 'unknown error'}`;
+      } catch {
+        statusEl.textContent = `❌ Test from “${label}” failed: network error.`;
+      } finally {
+        btn.disabled = false;
+        btn.textContent = old;
+      }
     }
 
     function renderFeed(recent) {
@@ -305,10 +425,11 @@
       try {
         const res = await fetch('/api/email/overview');
         const d = await res.json();
-        if (d.campaign) renderCampaign(d.campaign);
+        if (d.campaign) renderCampaign(d.campaign, d.window);
         renderWindow(d.window);
         renderCards(d);
         renderAccounts(d.accounts);
+        renderTokenAlert(d);
         renderFeed(d.recent);
         statusEl.textContent = '';
       } catch (e) {
@@ -367,6 +488,12 @@
     });
 
     accountsEl.addEventListener('click', async (e) => {
+      const authBtn = e.target.closest('.reauth');
+      if (authBtn) { startAuth(authBtn.dataset.auth); return; }
+
+      const testBtn = e.target.closest('[data-test]');
+      if (testBtn) { sendTest(testBtn); return; }
+
       const btn = e.target.closest('.toggle');
       if (!btn) return;
       btn.disabled = true;
@@ -381,6 +508,22 @@
         await load();
       } catch { btn.disabled = false; }
     });
+
+    // Add / authorize a brand-new account by label.
+    const newAcct = document.getElementById('newAcct');
+    const addAcct = document.getElementById('addAcct');
+    function submitNewAccount() {
+      const label = newAcct.value.trim();
+      if (!label) { newAcct.focus(); return; }
+      if (!/^[A-Za-z0-9._-]{1,64}$/.test(label)) {
+        statusEl.textContent = 'Invalid label — use letters, digits, . _ - (max 64).';
+        return;
+      }
+      newAcct.value = '';
+      startAuth(label);
+    }
+    addAcct.addEventListener('click', submitNewAccount);
+    newAcct.addEventListener('keydown', (e) => { if (e.key === 'Enter') submitNewAccount(); });
 
     load();
     loadSupp();

@@ -1,8 +1,8 @@
 import type { AppConfig } from './config.js';
 import { buildQueries, buildBaseFacets } from './config.js';
-import { GitHubClient } from './github.js';
+import { GitHubClient, isExcludedEmployer } from './github.js';
 import { UserStore } from './db.js';
-import { isUsOrEmpty } from './location.js';
+import { isUkOrEmpty } from './location.js';
 
 /** Fast/breadth seeding: sample a few seeds from many location×language×era slices. */
 async function facetedSeed(
@@ -86,7 +86,7 @@ async function deepSeed(
 
 /**
  * One crawl run:
- *   1. Faceted USA search (location × language) → seed usernames.
+ *   1. Faceted UK search (location × language) → seed usernames.
  *   2. For each seed: list non-fork repos → list each repo's contributors.
  *   3. Save EVERY discovered user (seed + contributor), any/no location.
  * No recursion: we never crawl the contributors' own repositories.
@@ -115,11 +115,20 @@ export async function runCrawl(config: AppConfig, cycle = 0): Promise<void> {
       // creation date is also dropped (can't prove it's old).
       const created = profile.github_created_at;
       if (!created || created.slice(0, 10) >= config.createdBefore) return false;
-      // Keep only users with no location or a USA location; drop foreign ones.
-      if (!isUsOrEmpty(profile.location)) return false;
+      // Keep only users with no location or a UK location; drop foreign ones.
+      if (!isUkOrEmpty(profile.location)) return false;
+      // Skip people who work at an excluded employer (Google / Upwork / Freelancer).
+      // Cheap company-field check first, before spending calls on enrichment.
+      if (isExcludedEmployer(profile.company)) return false;
+      // Skip accounts with no real profile picture (GitHub's default identicon).
+      // One CDN HEAD request — no API quota — and still cheaper than enrichment.
+      if (config.requireAvatar && !(await client.hasRealAvatar(profile.avatar_url))) return false;
 
       // Now enrich (resolve email + telegram) and require a contactable email.
+      // resolveEmail keeps only personal-provider addresses, so a user whose only
+      // contact is a company email ends up with no email here and is dropped.
       const user = await client.buildRecord(profile, via);
+      if (isExcludedEmployer(user.company, user.email)) return false; // email-domain catch
       if (config.requireEmail && !user.email) return false;
 
       store.upsert(user);
@@ -132,7 +141,7 @@ export async function runCrawl(config: AppConfig, cycle = 0): Promise<void> {
   };
 
   try {
-    // --- 1. Seed search (USA) ---
+    // --- 1. Seed search (UK) ---
     const seeds = config.deepSplit
       ? await deepSeed(config, client, store, stamp)
       : await facetedSeed(config, client, cycle, stamp);

@@ -12,8 +12,17 @@ import { google } from 'googleapis';
 // google-auth-library can resolve to a duplicate copy and clash with googleapis.
 type OAuth2Client = InstanceType<typeof google.auth.OAuth2>;
 
-/** Minimal scope: send only, no read access to the mailbox. */
-export const SCOPES = ['https://www.googleapis.com/auth/gmail.send'];
+// Send-only, plus identity. `openid`/`userinfo.email` grant NO mailbox access —
+// they only reveal WHICH account consented, which is what lets us prove that
+// token-<label>.json really belongs to <label>@gmail.com. Without them the label
+// is just a filename someone typed at auth time, and a token authorized while
+// signed into the wrong Google account is silently mislabelled: the campaign
+// then reports sends under a name that never sent them.
+export const SCOPES = [
+  'https://www.googleapis.com/auth/gmail.send',
+  'openid',
+  'https://www.googleapis.com/auth/userinfo.email',
+];
 
 const CREDENTIALS_PATH = process.env.GMAIL_CREDENTIALS_PATH?.trim() || './credentials.json';
 const TOKEN_PATH = process.env.GMAIL_TOKEN_PATH?.trim() || './token.json';
@@ -72,9 +81,21 @@ export function getAuthorizedClient(tokenPath: string = TOKEN_PATH): OAuth2Clien
   client.setCredentials(token);
   // Persist refreshed tokens back to THIS account's file (googleapis emits this
   // event whenever it auto-refreshes the access token).
+  //
+  // Merge onto whatever is on DISK RIGHT NOW, not onto `token` — that snapshot
+  // was read when this client was built and may be hours stale. A long-running
+  // daemon merging its own stale copy would silently revert a re-authorization
+  // done in the meantime (restoring the previous account's refresh_token) and
+  // drop fields the refresh response omits, such as the id_token that records
+  // which mailbox consented.
   client.on('tokens', (t) => {
-    const merged = { ...token, ...t };
-    writeFileSync(tokenPath, JSON.stringify(merged, null, 2));
+    let current = token;
+    try {
+      if (existsSync(tokenPath)) current = JSON.parse(readFileSync(tokenPath, 'utf8'));
+    } catch {
+      /* unreadable/half-written — fall back to the snapshot rather than lose the refresh */
+    }
+    writeFileSync(tokenPath, JSON.stringify({ ...current, ...t }, null, 2));
   });
   return client;
 }
@@ -144,9 +165,90 @@ export async function runConsentFlow(label = 'default', port = 5555): Promise<vo
 }
 
 /**
- * Health-check one account's token: does it exist, carry a refresh_token, and
- * can it still obtain a fresh access token? A failed refresh (invalid_grant)
- * means the token expired (Testing-mode 7-day limit) or was revoked.
+ * Consent URL for the dashboard-driven (web-mediated) re-auth flow. Unlike
+ * runConsentFlow (which spins its own localhost server), this hands the redirect
+ * back to the already-running UI server. The SAME `redirectUri` must be passed
+ * to exchangeCodeAndSave — Google validates it against the one used here. The
+ * account label is carried through OAuth `state` so the callback knows which
+ * token file to write.
+ */
+export function buildAuthUrl(label: string, redirectUri: string): string {
+  const client = makeOAuthClient(redirectUri);
+  return client.generateAuthUrl({
+    access_type: 'offline', // ask for a refresh_token
+    prompt: 'consent', // force a fresh refresh_token even on re-auth
+    scope: SCOPES,
+    state: label,
+  });
+}
+
+/**
+ * Exchange an OAuth `code` (from the dashboard flow) for tokens and persist
+ * tokens/token-<label>.json. If Google omits a refresh_token on re-consent, the
+ * previous one is preserved so long-running sending keeps working. Returns
+ * whether the saved token has a usable refresh_token.
+ */
+export async function exchangeCodeAndSave(
+  label: string,
+  code: string,
+  redirectUri: string
+): Promise<{ tokenPath: string; hasRefresh: boolean }> {
+  const client = makeOAuthClient(redirectUri);
+  const { tokens } = await client.getToken(code);
+  const tokenPath = tokenPathFor(label);
+  mkdirSync(dirname(tokenPath), { recursive: true });
+  let merged = tokens;
+  if (!tokens.refresh_token && existsSync(tokenPath)) {
+    try {
+      const prev = JSON.parse(readFileSync(tokenPath, 'utf8'));
+      if (prev.refresh_token) merged = { ...tokens, refresh_token: prev.refresh_token };
+    } catch {
+      /* fall back to whatever Google returned */
+    }
+  }
+  // Stamp the consenting mailbox permanently. The id_token itself is short-lived
+  // and absent from every refresh response, so identity would otherwise vanish on
+  // the first refresh; verified_email is our own field and survives the merge.
+  const consented = emailFromIdToken(merged.id_token);
+  const toWrite: Record<string, unknown> = { ...merged };
+  if (consented) toWrite.verified_email = consented;
+  writeFileSync(tokenPath, JSON.stringify(toWrite, null, 2));
+  return { tokenPath, hasRefresh: Boolean(merged.refresh_token) };
+}
+
+const SEND_SCOPE = 'https://www.googleapis.com/auth/gmail.send';
+
+/** Human-readable reminder for the one consent-screen mistake that causes this. */
+export const MISSING_SCOPE_HINT =
+  `token lacks the ${SEND_SCOPE} scope — re-authorize and TICK ` +
+  `"Send email on your behalf" on Google's consent screen`;
+
+/**
+ * Was gmail.send actually granted? Google's granular permissions let someone
+ * approve the sign-in scopes while leaving the Gmail checkbox unticked: the
+ * account then authenticates perfectly and fails only at the moment it sends,
+ * with "Request had insufficient authentication scopes".
+ *
+ * Returns null when the token predates scope recording — unknown, NOT missing,
+ * so an old-but-working token is never retired on a guess.
+ */
+export function hasSendScope(tokenPath: string): boolean | null {
+  if (!existsSync(tokenPath)) return null;
+  try {
+    const token = JSON.parse(readFileSync(tokenPath, 'utf8'));
+    if (typeof token.scope !== 'string' || !token.scope.trim()) return null;
+    return token.scope.split(/\s+/).includes(SEND_SCOPE);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Health-check one account's token: does it exist, carry a refresh_token, grant
+ * gmail.send, and can it still obtain a fresh access token? A failed refresh
+ * (invalid_grant) means the token expired (Testing-mode 7-day limit) or was
+ * revoked. A refresh that succeeds without gmail.send is the more confusing
+ * case — it looks healthy but cannot send a single message, so it fails here.
  */
 export async function verifyToken(
   tokenPath: string
@@ -157,7 +259,11 @@ export async function verifyToken(
   try {
     const client = getAuthorizedClient(tokenPath);
     const res = await client.getAccessToken(); // refreshes if the access token is stale
-    return { ok: Boolean(res?.token), hasRefresh, expiryDate: token.expiry_date };
+    if (!res?.token) return { ok: false, hasRefresh, expiryDate: token.expiry_date };
+    if (hasSendScope(tokenPath) === false) {
+      return { ok: false, hasRefresh, expiryDate: token.expiry_date, error: MISSING_SCOPE_HINT };
+    }
+    return { ok: true, hasRefresh, expiryDate: token.expiry_date };
   } catch (err) {
     return {
       ok: false,
@@ -166,6 +272,57 @@ export async function verifyToken(
       error: err instanceof Error ? err.message : String(err),
     };
   }
+}
+
+/**
+ * The Gmail address a token actually authenticates as — the ground truth the
+ * filename only claims. Reads the `email` claim from the stored id_token; if the
+ * token predates the identity scopes there is nothing to read, so it returns
+ * null (meaning "unverifiable", NOT "mismatched"). Re-authorize to populate it.
+ */
+export function mailboxOf(tokenPath: string): string | null {
+  if (!existsSync(tokenPath)) return null;
+  try {
+    const token = JSON.parse(readFileSync(tokenPath, 'utf8'));
+    // verified_email is stamped at consent and persists; id_token is the live
+    // claim but only exists until the first refresh drops it.
+    if (typeof token.verified_email === 'string') return token.verified_email;
+    return emailFromIdToken(token.id_token);
+  } catch {
+    return null; // malformed token — treat as unverifiable
+  }
+}
+
+/** The `email` claim inside a Google id_token (a JWT), or null. */
+function emailFromIdToken(idToken: unknown): string | null {
+  if (typeof idToken !== 'string' || !idToken.includes('.')) return null;
+  try {
+    const payload = JSON.parse(Buffer.from(idToken.split('.')[1], 'base64url').toString('utf8'));
+    return typeof payload.email === 'string' ? payload.email : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Lowercase + strip non-alphanumerics, so "coding-ninja714" == "coding.ninja714". */
+const normalizeId = (s: string): string => s.toLowerCase().replace(/[^a-z0-9]/g, '');
+
+/**
+ * Does this token's real mailbox match the label it is filed under?
+ * 'ok' | 'mismatch' | 'unverified' (token issued before the identity scopes).
+ */
+export function checkAccountIdentity(
+  label: string,
+  tokenPath: string
+): { status: 'ok' | 'mismatch' | 'unverified'; mailbox: string | null } {
+  const mailbox = mailboxOf(tokenPath);
+  if (!mailbox) return { status: 'unverified', mailbox: null };
+  const local = normalizeId(mailbox.split('@')[0]);
+  const want = normalizeId(label);
+  // startsWith, not equality — token-khushi50211.json is legitimately the
+  // mailbox khushi50211.11@gmail.com (same prefix rule the warm-up pairing uses).
+  const ok = local.startsWith(want) || want.startsWith(local);
+  return { status: ok ? 'ok' : 'mismatch', mailbox };
 }
 
 export interface Attachment {
@@ -196,6 +353,14 @@ function encodeHeader(value: string): string {
   if (/^[\x00-\x7F]*$/.test(value)) return value;
   return `=?UTF-8?B?${Buffer.from(value, 'utf8').toString('base64')}?=`;
 }
+
+/** base64 for a MIME part: wrapped at 76 chars, as RFC 2045 requires. Unwrapped
+ *  multi-kilobyte lines are technically non-conformant and read as sloppy to
+ *  filters, even though Gmail itself accepts them. */
+const base64Part = (s: string): string =>
+  Buffer.from(s.replace(/\r?\n/g, '\r\n'), 'utf8') // MIME line endings, uniformly
+    .toString('base64')
+    .replace(/(.{76})/g, '$1\r\n');
 
 /** URL-safe base64 with padding stripped, as Gmail's raw field requires. */
 function base64url(buf: Buffer): string {
@@ -237,13 +402,13 @@ export function buildRawMessage(
           'Content-Type: text/plain; charset="UTF-8"',
           'Content-Transfer-Encoding: base64',
           '',
-          Buffer.from(text, 'utf8').toString('base64'),
+          base64Part(text),
           '',
           `--${boundaryAlt}`,
           'Content-Type: text/html; charset="UTF-8"',
           'Content-Transfer-Encoding: base64',
           '',
-          Buffer.from(opts.html, 'utf8').toString('base64'),
+          base64Part(opts.html),
           '',
           `--${boundaryAlt}--`,
         ].join('\r\n'),
@@ -251,7 +416,7 @@ export function buildRawMessage(
     }
     return {
       contentHeaders: ['Content-Type: text/plain; charset="UTF-8"', 'Content-Transfer-Encoding: base64'],
-      body: Buffer.from(text, 'utf8').toString('base64'),
+      body: base64Part(text),
     };
   };
 

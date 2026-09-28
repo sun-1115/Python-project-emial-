@@ -7,7 +7,7 @@ imitating human behavior to protect deliverability and reduce ban risk.
 
 - **Rotation** across every authorized account (`tokens/token-<label>.json`).
 - **Warm-up ramp** per account: 5 → 10 → 15 → 20 emails/day over ~4 weeks, then holds.
-- **EST business-hours window** only (Mon–Fri, 9am–6pm by default).
+- **UK business-hours window** only (Mon–Fri, 9am–6pm by default).
 - **Human-like pacing**: 15–30 min randomized gap per account, occasional longer breaks,
   daily counts that vary a little (never exactly the cap).
 - **Unique content**: a `messages/` folder of templates (one picked at random per
@@ -71,7 +71,7 @@ pm2 start dist/server.js --name github-track
 pm2 save
 ```
 Now the bot runs 24/7 in the background; Start/Stop from the dashboard controls
-sending, and the warm-up caps + EST window still apply. Stopping the loop leaves
+sending, and the daily caps + UK window still apply. Stopping the loop leaves
 the UI up — it just halts sending within ~1 second.
 
 The messages folder and default subject used by the UI loop come from

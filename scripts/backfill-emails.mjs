@@ -6,8 +6,10 @@
 //   node scripts/backfill-emails.mjs --purge   → after filling, DELETE rows still emailless
 import { DatabaseSync } from 'node:sqlite';
 
-const { GitHubClient } = await import('file:///e:/Work/Github%20Track/dist/github.js');
-const { loadConfig } = await import('file:///e:/Work/Github%20Track/dist/config.js');
+import { load } from './_dist.mjs';
+
+const { GitHubClient } = await load('github.js');
+const { loadConfig } = await load('config.js');
 
 const cfg = loadConfig();
 const purge = process.argv.includes('--purge');

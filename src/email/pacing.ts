@@ -1,7 +1,7 @@
 // Human-like pacing rules. All time-of-day logic is evaluated in EMAIL_TIMEZONE
-// (default US Eastern) since our recipients are US GitHub users with no known
+// (default UK time) since our recipients are UK GitHub users with no known
 // per-person timezone. Three concerns live here:
-//   1. Send window   — only send on weekdays within business hours (EST).
+//   1. Send window   — only send on weekdays within business hours (UK time).
 //   2. Warm-up ramp   — a per-account daily cap that grows with account age.
 //   3. Jittered gaps  — randomized spacing between an account's sends.
 
@@ -10,7 +10,7 @@ function num(v: string | undefined, def: number): number {
   return Number.isFinite(n) ? n : def;
 }
 
-export const TIMEZONE = process.env.EMAIL_TIMEZONE?.trim() || 'America/New_York';
+export const TIMEZONE = process.env.EMAIL_TIMEZONE?.trim() || 'Europe/London';
 
 /** Business-hours window (inclusive start, exclusive end) in TIMEZONE. */
 export const SEND_START_HOUR = num(process.env.EMAIL_SEND_START_HOUR, 9);
@@ -53,6 +53,33 @@ export function inSendWindow(date: Date = new Date()): boolean {
   return SEND_DAYS.has(weekday) && hour >= SEND_START_HOUR && hour < SEND_END_HOUR;
 }
 
+/**
+ * Catch-up window: keep sending past SEND_END_HOUR — up to this hour — until each
+ * account reaches its daily cap, so a day that fell behind (downtime, expired
+ * tokens) still finishes its planned volume. Defaults to SEND_END_HOUR (disabled).
+ * Clamped to [SEND_END_HOUR, 24] so catch-up never bleeds into the next EST day.
+ */
+export const CATCHUP_END_HOUR = Math.min(
+  24,
+  Math.max(SEND_END_HOUR, num(process.env.EMAIL_CATCHUP_END_HOUR, SEND_END_HOUR))
+);
+/** Whether a catch-up extension is configured at all. */
+export const CATCHUP_ENABLED = CATCHUP_END_HOUR > SEND_END_HOUR;
+
+/** Sending allowed now, counting the catch-up extension. Daily caps still apply
+ *  during the extension, so it only sends when the day is behind. */
+export function inSendOrCatchupWindow(date: Date = new Date()): boolean {
+  const { weekday, hour } = zonedParts(date);
+  return SEND_DAYS.has(weekday) && hour >= SEND_START_HOUR && hour < CATCHUP_END_HOUR;
+}
+
+/** True during the post-window catch-up hours specifically (for UI/logging). */
+export function inCatchupHours(date: Date = new Date()): boolean {
+  if (!CATCHUP_ENABLED) return false;
+  const { weekday, hour } = zonedParts(date);
+  return SEND_DAYS.has(weekday) && hour >= SEND_END_HOUR && hour < CATCHUP_END_HOUR;
+}
+
 /** Calendar date (YYYY-MM-DD) in TIMEZONE — the key we count a day's sends by. */
 export function zonedDateString(date: Date = new Date()): string {
   // en-CA renders as ISO-style yyyy-mm-dd.
@@ -65,10 +92,16 @@ export function zonedDateString(date: Date = new Date()): string {
 }
 
 /**
- * Warm-up ramp: the base daily cap for an account of the given age. New accounts
- * start low and grow over ~4 weeks to DAILY_TARGET. Never exceeds the target.
+ * Warm-up ramp: OFF by default — every account starts straight at DAILY_TARGET.
+ * Set EMAIL_WARMUP_RAMP=true to instead ease new accounts up over ~4 weeks
+ * (5 → 10 → 15 → target), which is gentler on a brand-new mailbox's reputation.
+ * Distinct from EMAIL_WARMUP_ADDRESSES (the account-to-account warm-up mail).
  */
+export const WARMUP_RAMP = (process.env.EMAIL_WARMUP_RAMP ?? '').toLowerCase() === 'true';
+
+/** The base daily cap for an account of the given age. Never exceeds the target. */
 export function dailyCapForAge(ageDays: number): number {
+  if (!WARMUP_RAMP) return DAILY_TARGET;
   const ramp = ageDays < 7 ? 5 : ageDays < 14 ? 10 : ageDays < 21 ? 15 : DAILY_TARGET;
   return Math.min(ramp, DAILY_TARGET);
 }
@@ -80,9 +113,15 @@ export function stableJitter(seed: string, n: number): number {
   return n <= 0 ? 0 : h % n;
 }
 
-/** Today's effective cap for an account: warm-up ramp minus a small stable daily jitter. */
+/**
+ * How much a day's cap may vary below the base, so accounts don't all send the
+ * exact same number every day. 0 pins every account at the full cap.
+ */
+export const CAP_JITTER = Math.max(0, num(process.env.EMAIL_CAP_JITTER, 3));
+
+/** Today's effective cap for an account: base cap minus a small stable daily jitter. */
 export function effectiveDailyCap(ageDays: number, label: string, day: string): number {
-  return Math.max(1, dailyCapForAge(ageDays) - stableJitter(`${label}:${day}`, 3));
+  return Math.max(1, dailyCapForAge(ageDays) - stableJitter(`${label}:${day}`, CAP_JITTER));
 }
 
 /** Milliseconds to wait before an account's next send (jittered, occasional break). */

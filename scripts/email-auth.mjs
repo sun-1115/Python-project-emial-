@@ -6,7 +6,9 @@
 // Requires credentials.json (OAuth Desktop client) OR GOOGLE_CLIENT_ID/SECRET in .env.
 import 'dotenv/config';
 
-const { runConsentFlow } = await import('file:///e:/Work/Github%20Track/dist/email/gmail.js');
+import { load } from './_dist.mjs';
+
+const { runConsentFlow } = await load('email/gmail.js');
 
 const args = process.argv.slice(2);
 const opt = (name, def) => {
