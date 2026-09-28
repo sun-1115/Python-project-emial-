@@ -12,6 +12,7 @@ export interface UserRecord {
   company: string | null;
   location: string | null;
   email: string | null;
+  email_source: string | null; // where the email came from: 'profile' | 'commit' | 'bio'
   telegram: string | null;
   bio: string | null;
   blog: string | null;
@@ -78,6 +79,9 @@ export class UserStore {
     mkdirSync(dirname(dbPath), { recursive: true });
     this.db = new DatabaseSync(dbPath);
     this.db.exec('PRAGMA journal_mode = WAL;');
+    // Wait up to 8s on a locked DB instead of failing — lets the crawler and a
+    // concurrent backfill/query share the file gracefully.
+    this.db.exec('PRAGMA busy_timeout = 8000;');
     this.migrate();
 
     // Upsert by username. Keep first_seen_at and don't downgrade a 'search'
@@ -85,12 +89,12 @@ export class UserStore {
     this.upsertStmt = this.db.prepare(`
       INSERT INTO users (
         login, github_id, name, avatar_url, html_url, company, location, email,
-        telegram, bio, blog, public_repos, followers, following, github_created_at,
-        discovered_via, first_seen_at, last_fetched_at
+        email_source, telegram, bio, blog, public_repos, followers, following,
+        github_created_at, discovered_via, first_seen_at, last_fetched_at
       ) VALUES (
         :login, :github_id, :name, :avatar_url, :html_url, :company, :location, :email,
-        :telegram, :bio, :blog, :public_repos, :followers, :following, :github_created_at,
-        :discovered_via, datetime('now'), datetime('now')
+        :email_source, :telegram, :bio, :blog, :public_repos, :followers, :following,
+        :github_created_at, :discovered_via, datetime('now'), datetime('now')
       )
       ON CONFLICT(login) DO UPDATE SET
         github_id = excluded.github_id,
@@ -99,7 +103,9 @@ export class UserStore {
         html_url = excluded.html_url,
         company = excluded.company,
         location = excluded.location,
-        email = excluded.email,
+        -- Never lose a found email/handle: keep the existing one if the new fetch is null.
+        email = COALESCE(excluded.email, users.email),
+        email_source = COALESCE(excluded.email_source, users.email_source),
         telegram = COALESCE(excluded.telegram, users.telegram),
         bio = excluded.bio,
         blog = excluded.blog,
@@ -126,6 +132,7 @@ export class UserStore {
         company TEXT,
         location TEXT,
         email TEXT,
+        email_source TEXT,
         telegram TEXT,
         bio TEXT,
         blog TEXT,
@@ -144,12 +151,65 @@ export class UserStore {
         key TEXT PRIMARY KEY,
         value TEXT
       );
+
+      -- One row per send attempt by the email bot. Gives the campaign runner
+      -- idempotency (skip anyone already 'sent') and a full audit trail.
+      CREATE TABLE IF NOT EXISTS sent_emails (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        login TEXT,                 -- users.login this was sent to (NULL for ad-hoc sends)
+        to_email TEXT NOT NULL,
+        subject TEXT,
+        status TEXT NOT NULL,       -- 'sent' | 'error'
+        message_id TEXT,            -- Gmail message id on success
+        thread_id TEXT,
+        error TEXT,                 -- error message on failure
+        from_account TEXT,          -- which sending account handled it (for per-account caps/audit)
+        sent_day TEXT,              -- calendar date (EST) of the send, for daily-cap counting
+        sent_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_sent_login ON sent_emails(login);
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_sent_ok
+        ON sent_emails(to_email) WHERE status = 'sent';
+      CREATE INDEX IF NOT EXISTS idx_sent_acct_day
+        ON sent_emails(from_account, sent_day) WHERE status = 'sent';
+
+      -- One row per sending identity. created_at drives the warm-up ramp
+      -- (a fresh account gets a low daily cap that grows with age); paused lets
+      -- you retire an account that's degrading without deleting its history.
+      CREATE TABLE IF NOT EXISTS email_accounts (
+        account TEXT PRIMARY KEY,
+        created_at TEXT NOT NULL,
+        paused INTEGER NOT NULL DEFAULT 0,
+        note TEXT
+      );
+
+      -- Do-not-email list: opt-outs ("unsubscribe" replies) and hard bounces.
+      -- The campaign never sends to an address listed here. Stored lowercased.
+      CREATE TABLE IF NOT EXISTS suppressions (
+        email TEXT PRIMARY KEY,
+        reason TEXT,                -- 'unsubscribe' | 'bounce' | 'manual' | free text
+        added_at TEXT NOT NULL
+      );
     `);
 
     // Add columns introduced after the first release, for existing databases.
     const cols = this.db.prepare('PRAGMA table_info(users)').all() as { name: string }[];
     if (!cols.some((c) => c.name === 'telegram')) {
       this.db.exec('ALTER TABLE users ADD COLUMN telegram TEXT');
+    }
+    if (!cols.some((c) => c.name === 'email_source')) {
+      this.db.exec('ALTER TABLE users ADD COLUMN email_source TEXT');
+    }
+
+    // sent_emails gained multi-account columns after its first release.
+    const sentCols = this.db.prepare('PRAGMA table_info(sent_emails)').all() as { name: string }[];
+    if (sentCols.length > 0) {
+      if (!sentCols.some((c) => c.name === 'from_account')) {
+        this.db.exec('ALTER TABLE sent_emails ADD COLUMN from_account TEXT');
+      }
+      if (!sentCols.some((c) => c.name === 'sent_day')) {
+        this.db.exec('ALTER TABLE sent_emails ADD COLUMN sent_day TEXT');
+      }
     }
 
     this.migrateToSurrogateId();
@@ -182,6 +242,7 @@ export class UserStore {
           company TEXT,
           location TEXT,
           email TEXT,
+          email_source TEXT,
           telegram TEXT,
           bio TEXT,
           blog TEXT,
@@ -254,7 +315,7 @@ export class UserStore {
   list(opts: ListOptions): UserRecord[] {
     const limit = Math.min(Math.max(opts.limit ?? 24, 1), 100);
     const cols = `id, login, github_id, name, avatar_url, html_url, company, location,
-                  email, telegram, bio, public_repos, followers, following, discovered_via`;
+                  email, email_source, telegram, bio, public_repos, followers, following, discovered_via`;
     const params: Record<string, string | number> = { limit };
     const where: string[] = [];
 
@@ -288,7 +349,7 @@ export class UserStore {
     const pageSize = Math.min(Math.max(opts.pageSize ?? 24, 1), 100);
     const page = Math.max(opts.page ?? 1, 1);
     const cols = `id, login, github_id, name, avatar_url, html_url, company, location,
-                  email, telegram, bio, public_repos, followers, following, discovered_via`;
+                  email, email_source, telegram, bio, public_repos, followers, following, discovered_via`;
 
     const where: string[] = [];
     const params: Record<string, string | number> = {};
@@ -334,6 +395,252 @@ export class UserStore {
       throw err;
     }
     return removed;
+  }
+
+  /**
+   * Recipients for the email bot: users that have an email and have NOT already
+   * been sent to successfully. Ordered by id so runs are resumable/stable.
+   */
+  unsentRecipients(limit?: number): { login: string; email: string; name: string | null }[] {
+    const cap = Math.max(limit ?? 0, 0);
+    const sql = `
+      SELECT u.login, u.email, u.name
+      FROM users u
+      WHERE u.email IS NOT NULL AND u.email <> ''
+        AND NOT EXISTS (
+          SELECT 1 FROM sent_emails s
+          WHERE s.status = 'sent' AND s.to_email = u.email
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM suppressions x WHERE x.email = lower(u.email)
+        )
+      ORDER BY u.id
+      ${cap > 0 ? 'LIMIT :limit' : ''}`;
+    const rows = cap > 0 ? this.db.prepare(sql).all({ limit: cap }) : this.db.prepare(sql).all();
+    return rows as unknown as { login: string; email: string; name: string | null }[];
+  }
+
+  /** True if this address already has a successful send logged. */
+  wasSent(toEmail: string): boolean {
+    const row = this.db
+      .prepare("SELECT 1 FROM sent_emails WHERE status = 'sent' AND to_email = ? LIMIT 1")
+      .get(toEmail);
+    return row !== undefined;
+  }
+
+  /** Log the outcome of one send (success or failure). */
+  recordSend(entry: {
+    login: string | null;
+    toEmail: string;
+    subject: string | null;
+    status: 'sent' | 'error';
+    messageId?: string | null;
+    threadId?: string | null;
+    error?: string | null;
+    fromAccount?: string | null;
+    sentDay?: string | null;
+  }): void {
+    this.db
+      .prepare(
+        `INSERT INTO sent_emails
+           (login, to_email, subject, status, message_id, thread_id, error,
+            from_account, sent_day, sent_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`
+      )
+      .run(
+        entry.login,
+        entry.toEmail,
+        entry.subject ?? null,
+        entry.status,
+        entry.messageId ?? null,
+        entry.threadId ?? null,
+        entry.error ?? null,
+        entry.fromAccount ?? null,
+        entry.sentDay ?? null
+      );
+  }
+
+  // --- Email account registry (drives the warm-up ramp & pausing) ---
+
+  /** Register a sending account on first use; no-op if it already exists. */
+  registerAccount(account: string): void {
+    this.db
+      .prepare(
+        `INSERT INTO email_accounts (account, created_at) VALUES (?, datetime('now'))
+         ON CONFLICT(account) DO NOTHING`
+      )
+      .run(account);
+  }
+
+  /** Whole days since the account was first registered (0 on its first day). */
+  accountAgeDays(account: string): number {
+    const row = this.db
+      .prepare(
+        `SELECT CAST(julianday('now') - julianday(created_at) AS INTEGER) AS days
+         FROM email_accounts WHERE account = ?`
+      )
+      .get(account) as { days: number } | undefined;
+    return Math.max(row?.days ?? 0, 0);
+  }
+
+  isAccountPaused(account: string): boolean {
+    const row = this.db
+      .prepare('SELECT paused FROM email_accounts WHERE account = ?')
+      .get(account) as { paused: number } | undefined;
+    return (row?.paused ?? 0) === 1;
+  }
+
+  setAccountPaused(account: string, paused: boolean): void {
+    this.db
+      .prepare('UPDATE email_accounts SET paused = ? WHERE account = ?')
+      .run(paused ? 1 : 0, account);
+  }
+
+  /** Successful sends by this account on the given calendar day (EST date key). */
+  sentCountOnDay(account: string, day: string): number {
+    const row = this.db
+      .prepare(
+        `SELECT COUNT(*) AS c FROM sent_emails
+         WHERE status = 'sent' AND from_account = ? AND sent_day = ?`
+      )
+      .get(account, day) as { c: number };
+    return row.c;
+  }
+
+  /** Every registered sending account (for the dashboard). */
+  listEmailAccounts(): { account: string; created_at: string; paused: number }[] {
+    return this.db
+      .prepare('SELECT account, created_at, paused FROM email_accounts ORDER BY account')
+      .all() as { account: string; created_at: string; paused: number }[];
+  }
+
+  /** Lifetime sent count + last-send time per account, keyed by account label. */
+  accountAggregates(): Record<string, { totalSent: number; lastSent: string | null }> {
+    const rows = this.db
+      .prepare(
+        `SELECT from_account AS account, COUNT(*) AS total, MAX(sent_at) AS last
+         FROM sent_emails WHERE status = 'sent' AND from_account IS NOT NULL
+         GROUP BY from_account`
+      )
+      .all() as { account: string; total: number; last: string | null }[];
+    const out: Record<string, { totalSent: number; lastSent: string | null }> = {};
+    for (const r of rows) out[r.account] = { totalSent: r.total, lastSent: r.last };
+    return out;
+  }
+
+  /** Global email totals: successes, errors, and recipients not yet sent to. */
+  emailTotals(): { sent: number; error: number; unsent: number } {
+    const sent = (
+      this.db.prepare("SELECT COUNT(*) AS c FROM sent_emails WHERE status = 'sent'").get() as {
+        c: number;
+      }
+    ).c;
+    const error = (
+      this.db.prepare("SELECT COUNT(*) AS c FROM sent_emails WHERE status = 'error'").get() as {
+        c: number;
+      }
+    ).c;
+    const unsent = (
+      this.db
+        .prepare(
+          `SELECT COUNT(*) AS c FROM users u
+           WHERE u.email IS NOT NULL AND u.email <> ''
+             AND NOT EXISTS (
+               SELECT 1 FROM sent_emails s WHERE s.status = 'sent' AND s.to_email = u.email
+             )
+             AND NOT EXISTS (
+               SELECT 1 FROM suppressions x WHERE x.email = lower(u.email)
+             )`
+        )
+        .get() as { c: number }
+    ).c;
+    return { sent, error, unsent };
+  }
+
+  /** Most recent send attempts (success or error), newest first, for the activity feed. */
+  recentSends(limit = 20): {
+    login: string | null;
+    to_email: string;
+    subject: string | null;
+    status: string;
+    error: string | null;
+    from_account: string | null;
+    sent_at: string;
+  }[] {
+    return this.db
+      .prepare(
+        `SELECT login, to_email, subject, status, error, from_account, sent_at
+         FROM sent_emails ORDER BY id DESC LIMIT ?`
+      )
+      .all(Math.min(Math.max(limit, 1), 100)) as {
+      login: string | null;
+      to_email: string;
+      subject: string | null;
+      status: string;
+      error: string | null;
+      from_account: string | null;
+      sent_at: string;
+    }[];
+  }
+
+  // --- Suppression list (do-not-email) ---
+
+  /** True if this address is on the do-not-email list (case-insensitive). */
+  isSuppressed(email: string): boolean {
+    const row = this.db
+      .prepare('SELECT 1 FROM suppressions WHERE email = ? LIMIT 1')
+      .get(email.trim().toLowerCase());
+    return row !== undefined;
+  }
+
+  /** Add one address to the suppression list. Returns true if newly added. */
+  addSuppression(email: string, reason = 'manual'): boolean {
+    const addr = email.trim().toLowerCase();
+    if (!addr) return false;
+    const res = this.db
+      .prepare(
+        `INSERT INTO suppressions (email, reason, added_at) VALUES (?, ?, datetime('now'))
+         ON CONFLICT(email) DO NOTHING`
+      )
+      .run(addr, reason);
+    return res.changes > 0;
+  }
+
+  /** Add many addresses at once; returns how many were newly added. */
+  addSuppressions(emails: string[], reason = 'manual'): number {
+    let added = 0;
+    this.db.exec('BEGIN');
+    try {
+      for (const e of emails) if (this.addSuppression(e, reason)) added++;
+      this.db.exec('COMMIT');
+    } catch (err) {
+      this.db.exec('ROLLBACK');
+      throw err;
+    }
+    return added;
+  }
+
+  /** Remove one address from the suppression list. Returns true if it existed. */
+  removeSuppression(email: string): boolean {
+    const res = this.db
+      .prepare('DELETE FROM suppressions WHERE email = ?')
+      .run(email.trim().toLowerCase());
+    return res.changes > 0;
+  }
+
+  /** The suppression list, newest first (capped). */
+  listSuppressions(limit = 200): { email: string; reason: string | null; added_at: string }[] {
+    return this.db
+      .prepare('SELECT email, reason, added_at FROM suppressions ORDER BY added_at DESC, email LIMIT ?')
+      .all(Math.min(Math.max(limit, 1), 1000)) as {
+      email: string;
+      reason: string | null;
+      added_at: string;
+    }[];
+  }
+
+  suppressionCount(): number {
+    return (this.db.prepare('SELECT COUNT(*) AS c FROM suppressions').get() as { c: number }).c;
   }
 
   close(): void {

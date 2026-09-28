@@ -1,0 +1,29 @@
+I hope you are doing well.😊
+I'm Sun Wu from China.
+I’m a software developer.
+Until now, I have worked for a local company, but the salary is not enough to support my family.
+So, I have decided to start freelancing on Upwork or Freelancer.
+However, since I live in China, I have a few problems.
+So, I'd like to use an account from another region.
+I would like to explain this.
+
+-Why do I need to use an account from another region?
+It’s very difficult to get good jobs using an Asian-based Upwork account. That’s why I’m trying to avoid using a China/Asia-based account and instead use an account registered in another region.
+
+-How would I use your account?
+If you already have an Upwork account that you’re not using, I’d like to access it on your local computer via TeamViewer or AnyDesk.
+If you don’t have one, you could create a new account for me.
+If you use your Upwork account part-time, we could also share it—I would only use it when you’re not using it.
+
+-How would we handle payments?
+You can link Payoneer or PayPal to your Upwork account to receive payments. After withdrawing the earnings, you can keep an agreed percentage and send the rest to me via PayPal or Payoneer.
+I will share at least 10% of the profits.
+
+-Why do I need access through your local machine?
+If I access your Upwork account using a VPN, VPS, or cloud services like AWS, Upwork may detect the proxy IP and block the account.
+Therefore, I would need to access it through your local computer using TeamViewer or AnyDesk.
+If you’re concerned about your personal data, you can set up a virtual machine on your computer, and I can use the account there.
+
+Thank you for reading.
+
+Sun Wu

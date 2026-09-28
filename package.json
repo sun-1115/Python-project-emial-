@@ -10,7 +10,11 @@
     "dev": "tsx src/index.ts",
     "crawl:once": "tsx src/index.ts --once",
     "ui": "tsx src/server.ts",
-    "db": "node scripts/query.mjs"
+    "db": "node --no-warnings scripts/query.mjs",
+    "pm2": "scripts\\pm2.cmd",
+    "email:auth": "node scripts/email-auth.mjs",
+    "email:accounts": "node scripts/email-accounts.mjs",
+    "email:send": "node scripts/send-campaign.mjs"
   },
   "keywords": [
     "github",
@@ -27,6 +31,7 @@
     "@octokit/rest": "^22.0.1",
     "dotenv": "^16.4.5",
     "express": "^5.2.1",
+    "googleapis": "^173.0.0",
     "node-cron": "^3.0.3"
   },
   "devDependencies": {

@@ -4,3 +4,8 @@ data/
 .env
 *.log
 logs/
+
+# Gmail OAuth secrets — never commit
+credentials.json
+token.json
+tokens/

@@ -40,6 +40,26 @@ export async function withRetry<T>(fn: () => Promise<T>, label: string, retries 
   }
 }
 
+const EMAIL_RE = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/;
+
+/** A real, contactable email — not a GitHub privacy proxy or a placeholder. */
+export function isUsableEmail(email?: string | null): email is string {
+  if (!email) return false;
+  const e = email.trim().toLowerCase();
+  if (!EMAIL_RE.test(e)) return false;
+  if (e.includes('noreply') || e.includes('no-reply')) return false; // GitHub proxy etc.
+  if (e.endsWith('.local') || e.endsWith('.localhost') || e.endsWith('.internal')) return false;
+  if (e.includes('example.com') || e.includes('users.noreply')) return false;
+  return true;
+}
+
+/** First usable email found in free text (bio, blog, mailto:…), or null. */
+export function extractEmail(text?: string | null): string | null {
+  if (!text) return null;
+  const m = text.match(EMAIL_RE);
+  return m && isUsableEmail(m[0]) ? m[0] : null;
+}
+
 /** Pull a normalized https://t.me/<handle> link out of arbitrary text, if present. */
 export function extractTelegram(text?: string | null): string | null {
   if (!text) return null;
@@ -76,6 +96,24 @@ export interface RepoRef {
   owner: string;
   name: string;
   fork: boolean;
+}
+
+/** Raw public-profile fields — the cheap first fetch, before email/telegram enrichment. */
+export interface Profile {
+  login: string;
+  github_id: number | null;
+  name: string | null;
+  avatar_url: string | null;
+  html_url: string | null;
+  company: string | null;
+  location: string | null;
+  profileEmail: string | null;
+  bio: string | null;
+  blog: string | null;
+  public_repos: number | null;
+  followers: number | null;
+  following: number | null;
+  github_created_at: string | null;
 }
 
 export class GitHubClient {
@@ -225,13 +263,16 @@ export class GitHubClient {
     return { logins: collected, nextDate, leaves };
   }
 
-  /** Fetch a full user profile and map it to a UserRecord. */
-  async getUser(login: string, discoveredVia: UserRecord['discovered_via']): Promise<UserRecord> {
+  /**
+   * Fetch just the public profile (one API call). The crawler runs its cheap
+   * date/location filters on this BEFORE the extra email/telegram lookups, so we
+   * don't waste API calls enriching users we're about to drop.
+   */
+  async getProfile(login: string): Promise<Profile> {
     const { data } = await withRetry(
       () => this.octokit.rest.users.getByUsername({ username: login }),
       `getUser ${login}`
     );
-    const telegram = await this.findTelegram(login, data.blog, data.bio);
     return {
       login: data.login,
       github_id: data.id ?? null,
@@ -240,16 +281,143 @@ export class GitHubClient {
       html_url: data.html_url ?? null,
       company: data.company ?? null,
       location: data.location ?? null,
-      email: data.email ?? null,
-      telegram,
+      profileEmail: data.email ?? null,
       bio: data.bio ?? null,
       blog: data.blog ?? null,
       public_repos: data.public_repos ?? null,
       followers: data.followers ?? null,
       following: data.following ?? null,
       github_created_at: data.created_at ?? null,
+    };
+  }
+
+  /**
+   * Complete a fetched profile into a full UserRecord: resolve the email
+   * (profile → commit → bio) and Telegram handle. Costs 1-2 extra API calls, so
+   * only call it for users that already passed the cheap filters.
+   */
+  async buildRecord(
+    profile: Profile,
+    discoveredVia: UserRecord['discovered_via']
+  ): Promise<UserRecord> {
+    const telegram = await this.findTelegram(profile.login, profile.blog, profile.bio);
+    const { email, source } = await this.resolveEmail(
+      profile.login,
+      profile.profileEmail,
+      profile.blog,
+      profile.bio
+    );
+    return {
+      login: profile.login,
+      github_id: profile.github_id,
+      name: profile.name,
+      avatar_url: profile.avatar_url,
+      html_url: profile.html_url,
+      company: profile.company,
+      location: profile.location,
+      email,
+      email_source: source,
+      telegram,
+      bio: profile.bio,
+      blog: profile.blog,
+      public_repos: profile.public_repos,
+      followers: profile.followers,
+      following: profile.following,
+      github_created_at: profile.github_created_at,
       discovered_via: discoveredVia,
     };
+  }
+
+  /** Fetch a full user profile and map it to a UserRecord (profile + enrichment). */
+  async getUser(login: string, discoveredVia: UserRecord['discovered_via']): Promise<UserRecord> {
+    const profile = await this.getProfile(login);
+    return this.buildRecord(profile, discoveredVia);
+  }
+
+  /**
+   * Best-effort email with a trust-ordered fallback chain:
+   *   1. public profile email        (most reliable — the user published it)
+   *   2. commit author email          (mined from public PushEvents)
+   *   3. email found in blog / bio    (mailto: or raw address)
+   * GitHub privacy-proxy (`…@users.noreply.github.com`) and placeholder
+   * addresses are always skipped. Returns the email and where it came from.
+   */
+  async resolveEmail(
+    login: string,
+    profileEmail?: string | null,
+    blog?: string | null,
+    bio?: string | null
+  ): Promise<{ email: string | null; source: string | null }> {
+    if (isUsableEmail(profileEmail)) return { email: profileEmail.trim(), source: 'profile' };
+
+    const commit = await this.mineCommitEmail(login);
+    if (commit) return { email: commit, source: 'commit' };
+
+    const scraped = extractEmail(blog) ?? extractEmail(bio);
+    if (scraped) return { email: scraped, source: 'bio' };
+
+    return { email: null, source: null };
+  }
+
+  /** Public-profile fetch used by the email backfill (profile + fallback chain). */
+  async getEmail(login: string): Promise<{ email: string | null; source: string | null }> {
+    const { data } = await withRetry(
+      () => this.octokit.rest.users.getByUsername({ username: login }),
+      `getEmail ${login}`
+    );
+    return this.resolveEmail(login, data.email, data.blog, data.bio);
+  }
+
+  /**
+   * Mine commit author emails from the user's own (non-fork) repos and return
+   * the most frequently used usable one. This is the reliable email source: the
+   * Events API no longer includes commit details, but `GET /repos/…/commits?
+   * author={login}` exposes the author email on each of their commits. Skips
+   * GitHub's `…@users.noreply.github.com` proxy addresses. ~2-3 core API calls.
+   */
+  private async mineCommitEmail(login: string): Promise<string | null> {
+    try {
+      const repos = await this.listUserRepos(login, 3, 0); // top 3 non-fork repos
+      const counts = new Map<string, number>();
+      for (const r of repos) {
+        let res;
+        try {
+          res = await withRetry(
+            () =>
+              this.octokit.rest.repos.listCommits({
+                owner: r.owner,
+                repo: r.name,
+                author: login,
+                per_page: 10,
+              }),
+            `commits ${r.owner}/${r.name}`
+          );
+        } catch {
+          continue; // empty repo, etc. — try the next one
+        }
+        for (const c of res.data) {
+          // Ownership check: only trust the email when GitHub has linked THIS
+          // commit to the target account (c.author.login === login). GitHub links
+          // a commit to an account by matching the author email to one registered
+          // on it — so a match proves the email belongs to @login, not a co-author.
+          if (c.author?.login?.toLowerCase() !== login.toLowerCase()) continue;
+          const em = c.commit?.author?.email;
+          if (isUsableEmail(em)) counts.set(em, (counts.get(em) ?? 0) + 1);
+        }
+        if (counts.size) break; // found usable email(s) here — no need to scan more repos
+      }
+      let best: string | null = null;
+      let bestN = 0;
+      for (const [em, n] of counts) {
+        if (n > bestN) {
+          best = em;
+          bestN = n;
+        }
+      }
+      return best;
+    } catch {
+      return null; // user has no usable repos / all commits are proxy addresses
+    }
   }
 
   /**

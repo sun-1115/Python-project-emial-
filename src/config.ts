@@ -50,9 +50,11 @@ export interface AppConfig {
   // deep split (exhaustive per-facet coverage past GitHub's 1000/query cap)
   deepSplit: boolean;
   deepStartDate: string; // earliest account-creation date to sweep from
+  createdBefore: string; // ONLY keep accounts created strictly before this date (exclusive)
 
   // crawl
   crawlEnabled: boolean;
+  requireEmail: boolean; // only save users that have a discoverable email
   maxReposPerUser: number;
   maxContributorsPerRepo: number;
   maxTotalUsers: number;
@@ -103,8 +105,13 @@ export function loadConfig(): AppConfig {
 
     deepSplit: (process.env.DEEP_SPLIT ?? '').toLowerCase() === 'true',
     deepStartDate: process.env.DEEP_START_DATE?.trim() || '2008-01-01',
+    // Only keep OLD accounts: created strictly before this date. Excludes new
+    // (e.g. 2026) accounts that slip in via repo contributors.
+    createdBefore: process.env.CREATED_BEFORE?.trim() || '2020-01-01',
 
     crawlEnabled: (process.env.CRAWL_ENABLED ?? 'true').toLowerCase() !== 'false',
+    // Only keep users with a contactable email (pure contact list).
+    requireEmail: (process.env.REQUIRE_EMAIL ?? 'true').toLowerCase() !== 'false',
     maxReposPerUser: optNum(process.env.MAX_REPOS_PER_USER) ?? 30,
     maxContributorsPerRepo: optNum(process.env.MAX_CONTRIBUTORS_PER_REPO) ?? 30,
     maxTotalUsers: optNum(process.env.MAX_TOTAL_USERS) ?? 1000,
