@@ -17,7 +17,7 @@ If you use your Upwork account part-time, we could also share it—I would only 
 
 -How would we handle payments?
 You can link Payoneer or PayPal to your Upwork account to receive payments. After withdrawing the earnings, you can keep an agreed percentage and send the rest to me via PayPal or Payoneer.
-I will share at least 10% of the profits.
+I will share at least 20% of the income.
 
 -Why do I need access through your local machine?
 If I access your Upwork account using a VPN, VPS, or cloud services like AWS, Upwork may detect the proxy IP and block the account.

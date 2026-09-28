@@ -164,7 +164,7 @@ export class UserStore {
         thread_id TEXT,
         error TEXT,                 -- error message on failure
         from_account TEXT,          -- which sending account handled it (for per-account caps/audit)
-        sent_day TEXT,              -- calendar date (EST) of the send, for daily-cap counting
+        sent_day TEXT,              -- calendar date (UK time) of the send, for daily-cap counting
         sent_at TEXT NOT NULL
       );
       CREATE INDEX IF NOT EXISTS idx_sent_login ON sent_emails(login);
@@ -211,6 +211,7 @@ export class UserStore {
         this.db.exec('ALTER TABLE sent_emails ADD COLUMN sent_day TEXT');
       }
     }
+
 
     this.migrateToSurrogateId();
   }
@@ -320,7 +321,7 @@ export class UserStore {
     const where: string[] = [];
 
     if (opts.q) {
-      where.push('(login LIKE :q OR name LIKE :q OR location LIKE :q)');
+      where.push('(login LIKE :q OR name LIKE :q OR location LIKE :q OR email LIKE :q OR company LIKE :q)');
       params.q = `%${opts.q}%`;
     }
 
@@ -354,7 +355,7 @@ export class UserStore {
     const where: string[] = [];
     const params: Record<string, string | number> = {};
     if (opts.q) {
-      where.push('(login LIKE :q OR name LIKE :q OR location LIKE :q)');
+      where.push('(login LIKE :q OR name LIKE :q OR location LIKE :q OR email LIKE :q OR company LIKE :q)');
       params.q = `%${opts.q}%`;
     }
     const whereSql = where.length ? 'WHERE ' + where.join(' AND ') : '';
@@ -371,6 +372,14 @@ export class UserStore {
       .all({ ...params, limit: pageSize, offset: (page - 1) * pageSize }) as unknown as UserRecord[];
 
     return { users: rows, total, page, pageSize, totalPages: Math.max(Math.ceil(total / pageSize), 1) };
+  }
+
+  /** Every login + location, for previewing a purge without deleting anything. */
+  allLocations(): { login: string; location: string | null }[] {
+    return this.db.prepare('SELECT login, location FROM users').all() as unknown as {
+      login: string;
+      location: string | null;
+    }[];
   }
 
   /** Delete rows whose location fails the given predicate. Returns count removed. */
@@ -496,7 +505,7 @@ export class UserStore {
       .run(paused ? 1 : 0, account);
   }
 
-  /** Successful sends by this account on the given calendar day (EST date key). */
+  /** Successful sends by this account on the given calendar day (UK date key). */
   sentCountOnDay(account: string, day: string): number {
     const row = this.db
       .prepare(

@@ -42,6 +42,9 @@ export async function withRetry<T>(fn: () => Promise<T>, label: string, retries 
 
 const EMAIL_RE = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/;
 
+/** A 460px avatar at or under this many bytes is a generated identicon, not a photo. */
+const IDENTICON_MAX_BYTES = 4096;
+
 /** A real, contactable email — not a GitHub privacy proxy or a placeholder. */
 export function isUsableEmail(email?: string | null): email is string {
   if (!email) return false;
@@ -58,6 +61,51 @@ export function extractEmail(text?: string | null): string | null {
   if (!text) return null;
   const m = text.match(EMAIL_RE);
   return m && isUsableEmail(m[0]) ? m[0] : null;
+}
+
+/** Domain part of an email, lowercased ('' if malformed). */
+function emailDomain(email: string): string {
+  const at = email.lastIndexOf('@');
+  return at >= 0 ? email.slice(at + 1).trim().toLowerCase() : '';
+}
+
+// Free / personal mailbox providers. An address on any other domain is treated
+// as a company (work) email and skipped — we only want personal inboxes.
+const PERSONAL_EMAIL_DOMAINS = new Set([
+  'gmail.com', 'googlemail.com',
+  'yahoo.com', 'yahoo.co.uk', 'yahoo.co.in', 'ymail.com', 'rocketmail.com',
+  'outlook.com', 'hotmail.com', 'hotmail.co.uk', 'live.com', 'msn.com',
+  'icloud.com', 'me.com', 'mac.com',
+  'proton.me', 'protonmail.com', 'pm.me',
+  'aol.com', 'zoho.com', 'gmx.com', 'gmx.de', 'gmx.net',
+  'mail.com', 'fastmail.com', 'hey.com', 'tutanota.com', 'tuta.io',
+  'yandex.com', 'yandex.ru', 'qq.com', '163.com', '126.com', 'foxmail.com',
+]);
+
+/** A personal (non-company) email: usable AND on a known free provider. */
+export function isPersonalEmail(email?: string | null): email is string {
+  if (!isUsableEmail(email)) return false;
+  return PERSONAL_EMAIL_DOMAINS.has(emailDomain(email));
+}
+
+// Employers we exclude entirely (platforms / firms we don't want to contact),
+// matched on the profile `company` field or the email's corporate domain.
+const EXCLUDED_EMPLOYERS = ['google', 'upwork', 'freelancer'];
+const EXCLUDED_EMPLOYER_DOMAINS = ['google.com', 'upwork.com', 'freelancer.com'];
+
+/**
+ * True if this user works at an excluded employer — matched on the GitHub
+ * `company` field (e.g. "@Google", "Upwork Inc.") or an email on the employer's
+ * corporate domain (google.com / upwork.com / freelancer.com, incl. subdomains).
+ */
+export function isExcludedEmployer(company?: string | null, email?: string | null): boolean {
+  const c = (company ?? '').toLowerCase();
+  if (EXCLUDED_EMPLOYERS.some((name) => c.includes(name))) return true;
+  if (email) {
+    const d = emailDomain(email);
+    if (EXCLUDED_EMPLOYER_DOMAINS.some((dom) => d === dom || d.endsWith('.' + dom))) return true;
+  }
+  return false;
 }
 
 /** Pull a normalized https://t.me/<handle> link out of arbitrary text, if present. */
@@ -292,6 +340,44 @@ export class GitHubClient {
   }
 
   /**
+   * True if the user uploaded a real profile picture, false if GitHub is serving
+   * the auto-generated identicon (or the URL is missing).
+   *
+   * The REST API exposes no "has avatar" flag — every user gets an avatar_url —
+   * so we HEAD the image itself. Identicons are distinctive: always image/png,
+   * ~1.5 KB, and stamped with GitHub's fixed generator date (2016-07-31). Real
+   * uploads are jpeg, or PNGs far larger than the cutoff.
+   *
+   * Hits the avatars CDN, not the API, so it costs no GitHub rate-limit quota.
+   * On any network/parse failure we return true — an unreachable CDN shouldn't
+   * silently drop otherwise-good users.
+   */
+  async hasRealAvatar(avatarUrl: string | null): Promise<boolean> {
+    if (!avatarUrl) return false;
+    try {
+      // Ask for a fixed size so the byte-length cutoff means the same thing for
+      // everyone, whatever `s=` the profile URL happened to carry.
+      const url = new URL(avatarUrl);
+      url.searchParams.set('s', '460');
+      const res = await fetch(url, {
+        method: 'HEAD',
+        signal: AbortSignal.timeout(10_000),
+      });
+      if (!res.ok) return true;
+
+      const type = res.headers.get('content-type') ?? '';
+      if (!type.includes('png')) return true; // jpeg/webp => a real upload
+
+      const bytes = Number(res.headers.get('content-length'));
+      const lastModified = res.headers.get('last-modified') ?? '';
+      const isGeneratorDate = /31 Jul 2016/.test(lastModified);
+      return !(isGeneratorDate || (Number.isFinite(bytes) && bytes > 0 && bytes <= IDENTICON_MAX_BYTES));
+    } catch {
+      return true;
+    }
+  }
+
+  /**
    * Complete a fetched profile into a full UserRecord: resolve the email
    * (profile → commit → bio) and Telegram handle. Costs 1-2 extra API calls, so
    * only call it for users that already passed the cheap filters.
@@ -348,13 +434,15 @@ export class GitHubClient {
     blog?: string | null,
     bio?: string | null
   ): Promise<{ email: string | null; source: string | null }> {
-    if (isUsableEmail(profileEmail)) return { email: profileEmail.trim(), source: 'profile' };
+    // Only personal-provider emails are kept; a company address at any source is
+    // skipped so the chain falls through to the next (possibly personal) one.
+    if (isPersonalEmail(profileEmail)) return { email: profileEmail.trim(), source: 'profile' };
 
     const commit = await this.mineCommitEmail(login);
     if (commit) return { email: commit, source: 'commit' };
 
     const scraped = extractEmail(blog) ?? extractEmail(bio);
-    if (scraped) return { email: scraped, source: 'bio' };
+    if (isPersonalEmail(scraped)) return { email: scraped, source: 'bio' };
 
     return { email: null, source: null };
   }
@@ -402,9 +490,9 @@ export class GitHubClient {
           // on it — so a match proves the email belongs to @login, not a co-author.
           if (c.author?.login?.toLowerCase() !== login.toLowerCase()) continue;
           const em = c.commit?.author?.email;
-          if (isUsableEmail(em)) counts.set(em, (counts.get(em) ?? 0) + 1);
+          if (isPersonalEmail(em)) counts.set(em, (counts.get(em) ?? 0) + 1);
         }
-        if (counts.size) break; // found usable email(s) here — no need to scan more repos
+        if (counts.size) break; // found personal email(s) here — no need to scan more repos
       }
       let best: string | null = null;
       let bestN = 0;

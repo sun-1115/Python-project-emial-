@@ -20,12 +20,12 @@
 import 'dotenv/config';
 import { readFileSync } from 'node:fs';
 
-const { loadConfig } = await import('file:///e:/Work/Github%20Track/dist/config.js');
-const { UserStore } = await import('file:///e:/Work/Github%20Track/dist/db.js');
-const { runCampaign } = await import('file:///e:/Work/Github%20Track/dist/email/campaign.js');
-const { loadTemplates, parseTemplate } = await import(
-  'file:///e:/Work/Github%20Track/dist/email/content.js'
-);
+import { load } from './_dist.mjs';
+
+const { loadConfig } = await load('config.js');
+const { UserStore } = await load('db.js');
+const { runCampaign } = await load('email/campaign.js');
+const { loadTemplates, parseTemplate } = await load('email/content.js');
 
 const args = process.argv.slice(2);
 const flag = (name) => args.includes(name);

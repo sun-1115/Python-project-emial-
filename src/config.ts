@@ -1,5 +1,5 @@
 import 'dotenv/config';
-import { getUsSearchLocations } from './location.js';
+import { getUkSearchLocations } from './location.js';
 
 function optNum(value: string | undefined): number | undefined {
   if (!value) return undefined;
@@ -21,11 +21,12 @@ const VALID_LANGUAGES = new Set([
   'r', 'shell', 'objective-c', 'html', 'css', 'lua', 'clojure', 'erlang',
 ]);
 
-/** Default USA location variants (free-text field, so we cast a wide net). */
-const DEFAULT_US_LOCATIONS = [
-  'United States', 'USA', 'US', 'California', 'New York', 'Texas', 'Washington',
-  'Massachusetts', 'Illinois', 'Florida', 'San Francisco', 'Seattle', 'Los Angeles',
-  'Boston', 'Chicago', 'Austin', 'New York City', 'Portland', 'Denver', 'Atlanta',
+/** Default UK location variants (free-text field, so we cast a wide net). */
+const DEFAULT_UK_LOCATIONS = [
+  'United Kingdom', 'UK', 'England', 'Scotland', 'Wales', 'Northern Ireland',
+  'London', 'Manchester', 'Birmingham', 'Edinburgh', 'Glasgow', 'Bristol',
+  'Leeds', 'Liverpool', 'Cambridge', 'Oxford', 'Cardiff', 'Belfast',
+  'Brighton', 'Sheffield', 'Newcastle', 'Nottingham',
 ];
 
 export interface AppConfig {
@@ -55,6 +56,7 @@ export interface AppConfig {
   // crawl
   crawlEnabled: boolean;
   requireEmail: boolean; // only save users that have a discoverable email
+  requireAvatar: boolean; // only save users with a real photo (not GitHub's identicon)
   maxReposPerUser: number;
   maxContributorsPerRepo: number;
   maxTotalUsers: number;
@@ -71,15 +73,15 @@ export function loadConfig(): AppConfig {
   }
 
   // Locations: both SEARCH_LOCATIONS and SEARCH_LOCATION accept a comma list.
-  // With SEARCH_ALL_US=true, also fold in every US state + city (from location.ts)
+  // With SEARCH_ALL_UK=true, also fold in every UK county + city (from location.ts)
   // as search facets — hundreds of slices to beat the 1000-per-query cap.
   const locList = [...csv(process.env.SEARCH_LOCATIONS), ...csv(process.env.SEARCH_LOCATION)];
-  const useAllUs = (process.env.SEARCH_ALL_US ?? '').toLowerCase() === 'true';
-  const locations = useAllUs
-    ? [...new Set([...getUsSearchLocations(), ...locList])]
+  const useAllUk = (process.env.SEARCH_ALL_UK ?? '').toLowerCase() === 'true';
+  const locations = useAllUk
+    ? [...new Set([...getUkSearchLocations(), ...locList])]
     : locList.length > 0
       ? [...new Set(locList)]
-      : DEFAULT_US_LOCATIONS;
+      : DEFAULT_UK_LOCATIONS;
 
   const languages = csv(process.env.SEARCH_LANGUAGE)
     .map((l) => l.toLowerCase())
@@ -112,6 +114,9 @@ export function loadConfig(): AppConfig {
     crawlEnabled: (process.env.CRAWL_ENABLED ?? 'true').toLowerCase() !== 'false',
     // Only keep users with a contactable email (pure contact list).
     requireEmail: (process.env.REQUIRE_EMAIL ?? 'true').toLowerCase() !== 'false',
+    // Skip users who never uploaded a profile picture (GitHub serves them an
+    // auto-generated identicon) — they tend to be dormant/throwaway accounts.
+    requireAvatar: (process.env.REQUIRE_AVATAR ?? 'true').toLowerCase() !== 'false',
     maxReposPerUser: optNum(process.env.MAX_REPOS_PER_USER) ?? 30,
     maxContributorsPerRepo: optNum(process.env.MAX_CONTRIBUTORS_PER_REPO) ?? 30,
     maxTotalUsers: optNum(process.env.MAX_TOTAL_USERS) ?? 1000,
@@ -126,7 +131,7 @@ export function loadConfig(): AppConfig {
 /**
  * Build the faceted list of GitHub user-search queries.
  * One query per (location × language) so each returns up to GitHub's 1000-result
- * cap — faceting is how we exceed that cap and cover the whole US broadly.
+ * cap — faceting is how we exceed that cap and cover the whole UK broadly.
  */
 export function buildQueries(cfg: AppConfig): string[] {
   const base: string[] = [];

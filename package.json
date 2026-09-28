@@ -11,6 +11,7 @@
     "crawl:once": "tsx src/index.ts --once",
     "ui": "tsx src/server.ts",
     "db": "node --no-warnings scripts/query.mjs",
+    "db:purge": "node --no-warnings scripts/purge-locations.mjs",
     "pm2": "scripts\\pm2.cmd",
     "email:auth": "node scripts/email-auth.mjs",
     "email:accounts": "node scripts/email-accounts.mjs",
