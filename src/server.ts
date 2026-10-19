@@ -2,7 +2,7 @@ import express from 'express';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { loadConfig } from './config.js';
-import { UserStore, SORT_SQL, type SortKey } from './db.js';
+import { UserStore, SORT_SQL, USER_FILTERS, type UserFilter, type SortKey } from './db.js';
 import { discoverAccounts } from './email/accounts.js';
 import {
   buildAuthUrl,
@@ -177,12 +177,29 @@ app.get('/api/users', (req, res) => {
   const sort: SortKey = requested in SORT_SQL ? (requested as SortKey) : 'username';
   const page = Number(req.query.page) || 1;
   const pageSize = Number(req.query.pageSize) || 24;
+  // Whitelisted like sort — an unknown value falls back to 'all' instead of
+  // reaching the store and silently matching nothing.
+  const requested_f = String(req.query.filter ?? 'all');
+  const filter: UserFilter = (USER_FILTERS as readonly string[]).includes(requested_f)
+    ? (requested_f as UserFilter)
+    : 'all';
 
-  res.json(store.page({ q, sort, page, pageSize }));
+  res.json(store.page({ q, sort, page, pageSize, filter }));
 });
 
 app.get('/api/stats', (_req, res) => {
   res.json({ total: store.count() });
+});
+
+// Cheap campaign state for the users page's master switch. Deliberately NOT
+// /api/email/overview: that one probes every Gmail token, far too heavy for a
+// control that polls.
+app.get('/api/email/state', (_req, res) => {
+  res.json({
+    running: campaign.running,
+    desired: store.getState('email_sending') ?? 'off',
+    lastError: campaign.lastError,
+  });
 });
 
 // Email dashboard: window status, global totals, per-account caps/usage, recent sends.

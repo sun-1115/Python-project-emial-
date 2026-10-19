@@ -56,15 +56,33 @@ export const SORT_SQL: Record<SortKey, string> = {
   recent: 'first_seen_at DESC, login ASC',
 };
 
+/**
+ * Which slice of the list to show. The names describe SEND eligibility, not the
+ * user record: 'sendable' is precisely who the campaign would mail next, so the
+ * review screen and the bot can never disagree about who is in the queue.
+ */
+export const USER_FILTERS = [
+  'all', 'sendable', 'sent', 'excluded', 'excluded_manual', 'excluded_auto', 'noemail',
+] as const;
+export type UserFilter = (typeof USER_FILTERS)[number];
+
 export interface PageOptions {
   q?: string;
   page?: number; // 1-based
   pageSize?: number;
   sort?: SortKey;
+  filter?: UserFilter;
+}
+
+/** A listed user plus the two send-state fields the review UI needs. */
+export interface UserListRow extends UserRecord {
+  sent_at: string | null; // first successful send to this address, or null
+  suppressed: number; // 1 = on the do-not-email list (SQLite has no boolean)
+  suppress_reason: string | null; // why: 'non-uk' (set in bulk by the merge) | 'manual' | ...
 }
 
 export interface Page {
-  users: UserRecord[];
+  users: UserListRow[];
   total: number;
   page: number;
   pageSize: number;
@@ -146,6 +164,11 @@ export class UserStore {
       );
       CREATE INDEX IF NOT EXISTS idx_users_followers ON users(followers DESC);
       CREATE INDEX IF NOT EXISTS idx_users_location ON users(location);
+      -- The UI's send-state filters count with a NOT EXISTS against sent_emails
+      -- and suppressions for every row; scanning this narrow index instead of
+      -- the whole table takes the "queued to send" count from ~560ms to ~150ms.
+      CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
+      CREATE INDEX IF NOT EXISTS idx_users_email_lower ON users(lower(email));
 
       CREATE TABLE IF NOT EXISTS crawl_state (
         key TEXT PRIMARY KEY,
@@ -170,6 +193,12 @@ export class UserStore {
       CREATE INDEX IF NOT EXISTS idx_sent_login ON sent_emails(login);
       CREATE UNIQUE INDEX IF NOT EXISTS idx_sent_ok
         ON sent_emails(to_email) WHERE status = 'sent';
+      -- Case-folded twin of the above. "Foo@Bar.com" and "foo@bar.com" are one
+      -- mailbox, so a case-sensitive match alone would let the second spelling
+      -- through and mail somebody twice. Also what the lower() lookups below
+      -- use, so the dedup stays an index seek rather than a table scan.
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_sent_ok_lower
+        ON sent_emails(lower(to_email)) WHERE status = 'sent';
       CREATE INDEX IF NOT EXISTS idx_sent_acct_day
         ON sent_emails(from_account, sent_day) WHERE status = 'sent';
 
@@ -181,6 +210,16 @@ export class UserStore {
         created_at TEXT NOT NULL,
         paused INTEGER NOT NULL DEFAULT 0,
         note TEXT
+      );
+
+      -- Seeds whose repositories have been walked. Kept separate from the
+      -- users table because a seed dropped by the date/email/location filters
+      -- is never stored as a user, yet its repos WERE crawled — inferring this
+      -- from the users table would re-walk those seeds forever.
+      CREATE TABLE IF NOT EXISTS crawled_seeds (
+        login TEXT PRIMARY KEY,
+        crawled_at TEXT NOT NULL,
+        repos INTEGER          -- how many repos were walked, for diagnostics
       );
 
       -- Do-not-email list: opt-outs ("unsubscribe" replies) and hard bounces.
@@ -286,6 +325,53 @@ export class UserStore {
     return row !== undefined;
   }
 
+  /**
+   * True if this login is already stored, and still fresh enough to skip.
+   * `login` is UNIQUE so this is one index lookup — far cheaper than the
+   * GitHub profile call it saves.
+   *
+   * refetchAfterDays = 0 means never re-fetch a known user; a positive value
+   * lets a stale row be refreshed (emails and follower counts do change).
+   */
+  hasFreshUser(login: string, refetchAfterDays = 0): boolean {
+    const row = this.db
+      .prepare('SELECT last_fetched_at FROM users WHERE login = ?')
+      .get(login) as { last_fetched_at: string } | undefined;
+    if (!row) return false;
+    if (refetchAfterDays <= 0) return true;
+    // Stored by datetime('now') as "YYYY-MM-DD HH:MM:SS" in UTC with no zone
+    // marker, which Date.parse reads inconsistently — make it explicit.
+    const ms = Date.parse(String(row.last_fetched_at).replace(' ', 'T') + 'Z');
+    if (!Number.isFinite(ms)) return true; // unparseable: treat as fresh, don't re-spend
+    return (Date.now() - ms) / 86_400_000 < refetchAfterDays;
+  }
+
+  /**
+    * True if this seed's repositories have already been walked and are still
+    * fresh enough to skip. recrawlAfterDays = 0 means never walk them again.
+    */
+  seedCrawled(login: string, recrawlAfterDays = 0): boolean {
+    const row = this.db
+      .prepare('SELECT crawled_at FROM crawled_seeds WHERE login = ?')
+      .get(login) as { crawled_at: string } | undefined;
+    if (!row) return false;
+    if (recrawlAfterDays <= 0) return true;
+    const ms = Date.parse(String(row.crawled_at).replace(' ', 'T') + 'Z');
+    if (!Number.isFinite(ms)) return true;
+    return (Date.now() - ms) / 86_400_000 < recrawlAfterDays;
+  }
+
+  /** Record that this seed's repositories were walked. */
+  markSeedCrawled(login: string, repos: number): void {
+    this.db
+      .prepare(
+        `INSERT INTO crawled_seeds (login, crawled_at, repos)
+         VALUES (?, datetime('now'), ?)
+         ON CONFLICT(login) DO UPDATE SET crawled_at = datetime('now'), repos = excluded.repos`
+      )
+      .run(login, repos);
+  }
+
   count(): number {
     const row = this.db.prepare('SELECT COUNT(*) AS c FROM users').get() as { c: number };
     return row.c;
@@ -349,11 +435,53 @@ export class UserStore {
   page(opts: PageOptions): Page {
     const pageSize = Math.min(Math.max(opts.pageSize ?? 24, 1), 100);
     const page = Math.max(opts.page ?? 1, 1);
+    // sent_at / suppressed are keyed on the ADDRESS, not the login — the same
+    // key unsentRecipients() uses. Deriving them from one source keeps the badge
+    // the UI shows and the decision the bot makes in lockstep.
     const cols = `id, login, github_id, name, avatar_url, html_url, company, location,
-                  email, email_source, telegram, bio, public_repos, followers, following, discovered_via`;
+                  email, email_source, telegram, bio, public_repos, followers, following, discovered_via,
+                  (SELECT s.sent_at FROM sent_emails s
+                     WHERE s.status = 'sent' AND s.to_email = users.email
+                     ORDER BY s.sent_at LIMIT 1) AS sent_at,
+                  EXISTS (SELECT 1 FROM suppressions x
+                            WHERE x.email = lower(users.email)) AS suppressed,
+                  (SELECT x.reason FROM suppressions x
+                     WHERE x.email = lower(users.email)) AS suppress_reason`;
 
     const where: string[] = [];
     const params: Record<string, string | number> = {};
+    // Mirrors of unsentRecipients()'s three conditions, reused by the filters
+    // below so "sendable" here means exactly what it means to the campaign.
+    const HAS_EMAIL = "users.email IS NOT NULL AND users.email <> ''";
+    const IS_SENT =
+      "EXISTS (SELECT 1 FROM sent_emails s WHERE s.status = 'sent' AND s.to_email = users.email)";
+    const IS_SUPPRESSED =
+      'EXISTS (SELECT 1 FROM suppressions x WHERE x.email = lower(users.email))';
+    // 'non-uk' is the bulk reason written by the US-database merge; anything
+    // else was a deliberate, per-person choice.
+    const IS_AUTO =
+      "EXISTS (SELECT 1 FROM suppressions x WHERE x.email = lower(users.email) AND x.reason = 'non-uk')";
+    switch (opts.filter) {
+      case 'sendable':
+        where.push(HAS_EMAIL, `NOT ${IS_SENT}`, `NOT ${IS_SUPPRESSED}`);
+        break;
+      case 'sent':
+        where.push(IS_SENT);
+        break;
+      case 'excluded':
+        where.push(HAS_EMAIL, IS_SUPPRESSED);
+        break;
+      case 'excluded_manual':
+        where.push(HAS_EMAIL, IS_SUPPRESSED, `NOT ${IS_AUTO}`);
+        break;
+      case 'excluded_auto':
+        where.push(HAS_EMAIL, IS_AUTO);
+        break;
+      case 'noemail':
+        where.push(`NOT (${HAS_EMAIL})`);
+        break;
+      // 'all' / undefined -> no send-state restriction
+    }
     if (opts.q) {
       where.push('(login LIKE :q OR name LIKE :q OR location LIKE :q OR email LIKE :q OR company LIKE :q)');
       params.q = `%${opts.q}%`;
@@ -369,7 +497,7 @@ export class UserStore {
 
     const rows = this.db
       .prepare(`SELECT ${cols} FROM users ${whereSql} ${orderBy} LIMIT :limit OFFSET :offset`)
-      .all({ ...params, limit: pageSize, offset: (page - 1) * pageSize }) as unknown as UserRecord[];
+      .all({ ...params, limit: pageSize, offset: (page - 1) * pageSize }) as unknown as UserListRow[];
 
     return { users: rows, total, page, pageSize, totalPages: Math.max(Math.ceil(total / pageSize), 1) };
   }
@@ -418,7 +546,7 @@ export class UserStore {
       WHERE u.email IS NOT NULL AND u.email <> ''
         AND NOT EXISTS (
           SELECT 1 FROM sent_emails s
-          WHERE s.status = 'sent' AND s.to_email = u.email
+          WHERE s.status = 'sent' AND lower(s.to_email) = lower(u.email)
         )
         AND NOT EXISTS (
           SELECT 1 FROM suppressions x WHERE x.email = lower(u.email)
@@ -429,10 +557,12 @@ export class UserStore {
     return rows as unknown as { login: string; email: string; name: string | null }[];
   }
 
-  /** True if this address already has a successful send logged. */
+  /** True if this address already has a successful send logged (case-insensitive). */
   wasSent(toEmail: string): boolean {
     const row = this.db
-      .prepare("SELECT 1 FROM sent_emails WHERE status = 'sent' AND to_email = ? LIMIT 1")
+      .prepare(
+        "SELECT 1 FROM sent_emails WHERE status = 'sent' AND lower(to_email) = lower(?) LIMIT 1"
+      )
       .get(toEmail);
     return row !== undefined;
   }
@@ -555,7 +685,7 @@ export class UserStore {
           `SELECT COUNT(*) AS c FROM users u
            WHERE u.email IS NOT NULL AND u.email <> ''
              AND NOT EXISTS (
-               SELECT 1 FROM sent_emails s WHERE s.status = 'sent' AND s.to_email = u.email
+               SELECT 1 FROM sent_emails s WHERE s.status = 'sent' AND lower(s.to_email) = lower(u.email)
              )
              AND NOT EXISTS (
                SELECT 1 FROM suppressions x WHERE x.email = lower(u.email)

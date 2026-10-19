@@ -1,54 +1,133 @@
-// Heuristic UK-location detection for GitHub's free-text `location` field.
-// Rule: keep a user if their location is EMPTY or looks like the UK; drop
+// Heuristic US-location detection for GitHub's free-text `location` field.
+// Rule: keep a user if their location is EMPTY or looks like the US; drop
 // clearly-foreign locations.
 //
-// Matching order matters. It runs in three tiers, strongest evidence first:
-//   1. DEFINITIVE UK — a country name, a UK postcode, or a multi-word county.
-//      Nothing outside the UK is called "County Durham" or sits in "DH1 3LE".
-//   2. FOREIGN — an explicit country, US state (name or abbreviation), or
-//      Canadian province. Wins over tier 3.
-//   3. AMBIGUOUS UK — a bare county or city name. These are homonym-prone
-//      (Durham, Boston, Kent, Surrey, Manchester all exist in North America),
-//      so they only count once tier 2 has ruled out a foreign qualifier.
+// Same three-tier shape the UK version used, with the home country swapped:
+//   1. DEFINITIVE US — the country name, a multi-word state, or a state
+//      abbreviation standing alone as a comma segment. Nothing outside the US
+//      is "North Carolina" or sits in ", TX".
+//   2. FOREIGN — an explicit country, a UK nation / county / UK-distinctive
+//      city, or a Canadian province. Wins over tier 3.
+//   3. AMBIGUOUS US — a bare state or city name, a ZIP code, or a comma-less
+//      state abbreviation. These are homonym-prone, so they only count once
+//      tier 2 has ruled out a foreign qualifier.
 //
-// Tiers 1 and 2 must stay ahead of tier 3: a bare "Durham" is UK, but
-// "Durham, NC" is not, and the county name alone cannot tell them apart.
-//   "Durham"               -> UK (county)     "Durham, NC"      -> foreign (US state)
-//   "Boston, Lincolnshire" -> UK (county)     "Boston, MA"      -> foreign (US state)
-//   "Birmingham, UK"       -> UK (country)    "Birmingham, AL"  -> foreign (US state)
-//   "County Durham"        -> UK (county)     "London, Ontario" -> foreign (CA province)
+// The rule that makes this work: a place name shared by both countries must
+// NOT appear in the tier-2 foreign lists, or its bare form would be read as
+// British. Only UK-distinctive names belong there — which is why Boston,
+// Cambridge, Manchester, Birmingham, Durham, Richmond, Lincoln, York, Reading,
+// Portsmouth, Plymouth, Worcester, Newport, Bristol and Newcastle are all
+// absent from them despite being British cities too.
+//   "Boston"          -> US (city)     "Boston, Lincolnshire" -> foreign (county)
+//   "Manchester"      -> US (NH)       "Manchester, UK"       -> foreign (nation)
+//   "Cambridge"       -> US (MA)       "Cambridge, England"   -> foreign (nation)
+//   "Paris, TX"       -> US (state)    "Paris, France"        -> foreign (country)
+//   "Devon, PA"       -> US (state)    "Devon"                -> foreign (county)
+//   "Austin TX 78701" -> US (abbr)     "London, Ontario"      -> foreign (province)
+//
+// ZIP codes sit in tier 3, not tier 1: plenty of countries use five-digit
+// postal codes, so "Berlin, 10115" must reach the foreign check first.
 
 import { readFileSync, existsSync } from 'node:fs';
 
-// The four nations + the common shorthands people type.
-const NATION_SINGLE = new Set([
-  'uk', 'u.k.', 'gb', 'britain', 'england', 'scotland', 'wales', 'cymru',
-  'english', 'scottish', 'welsh', 'british',
-]);
+// The country itself, as a whole comma segment or word.
+const US_SINGLE = new Set(['usa', 'us', 'u.s.', 'u.s.a', 'u.s.a.', 'america', 'american', 'stateside']);
 
-const NATION_MULTIWORD = [
-  'united kingdom', 'great britain', 'northern ireland', 'u. k.',
-  'england, uk', 'the uk',
+const US_MULTIWORD = [
+  'united states', 'united states of america', 'u. s. a', 'the states',
 ];
 
-// Counties / regions — a strong UK signal on their own.
-const COUNTY_SINGLE = new Set([
+// Multi-word states — unambiguous, so they can settle a location on their own.
+const STATE_MULTIWORD = [
+  'new york', 'new jersey', 'new mexico', 'new hampshire', 'north carolina',
+  'south carolina', 'north dakota', 'south dakota', 'west virginia',
+  'rhode island', 'district of columbia', 'washington dc', 'washington d.c.',
+  'new england', 'puerto rico',
+];
+
+// Single-word states. Homonym risk is low but non-zero ("georgia" is also a
+// country), so these sit in tier 3 behind the foreign pass.
+const STATE_SINGLE = new Set([
+  'alabama', 'alaska', 'arizona', 'arkansas', 'california', 'colorado',
+  'connecticut', 'delaware', 'florida', 'hawaii', 'idaho', 'illinois',
+  'indiana', 'iowa', 'kansas', 'kentucky', 'louisiana', 'maine', 'maryland',
+  'massachusetts', 'michigan', 'minnesota', 'mississippi', 'missouri',
+  'montana', 'nebraska', 'nevada', 'ohio', 'oklahoma', 'oregon',
+  'pennsylvania', 'tennessee', 'texas', 'utah', 'vermont', 'virginia',
+  'washington', 'wisconsin', 'wyoming',
+]);
+
+// US cities and tech hubs. Shared names (Boston, Cambridge, Manchester,
+// Birmingham, Durham, Richmond...) live here deliberately: tier 2 already
+// catches them when a British qualifier is present, so the bare form should
+// resolve to the US. Extend at runtime via data/us-cities.txt.
+const US_CITIES = new Set<string>([
+  'new york city', 'nyc', 'brooklyn', 'manhattan', 'queens', 'bronx',
+  'staten island', 'san francisco', 'sf', 'bay area', 'silicon valley',
+  'palo alto', 'mountain view', 'menlo park', 'cupertino', 'sunnyvale',
+  'santa clara', 'san jose', 'oakland', 'berkeley', 'los angeles', 'la',
+  'san diego', 'sacramento', 'san mateo', 'irvine', 'pasadena', 'long beach',
+  'santa monica', 'chicago', 'houston', 'dallas', 'austin', 'san antonio',
+  'fort worth', 'el paso', 'phoenix', 'tucson', 'scottsdale', 'tempe',
+  'philadelphia', 'philly', 'pittsburgh', 'seattle', 'redmond', 'bellevue',
+  'tacoma', 'spokane', 'portland', 'eugene', 'denver', 'boulder',
+  'colorado springs', 'fort collins', 'atlanta', 'savannah', 'miami',
+  'orlando', 'tampa', 'jacksonville', 'st petersburg', 'fort lauderdale',
+  'detroit', 'ann arbor', 'grand rapids', 'minneapolis', 'st paul',
+  'milwaukee', 'madison', 'kansas city', 'st louis', 'omaha', 'des moines',
+  'indianapolis', 'columbus', 'cleveland', 'cincinnati', 'dayton', 'akron',
+  'toledo', 'nashville', 'memphis', 'knoxville', 'chattanooga', 'louisville',
+  'lexington', 'charlotte', 'raleigh', 'durham', 'chapel hill', 'greensboro',
+  'charleston', 'columbia', 'richmond', 'virginia beach', 'norfolk',
+  'arlington', 'alexandria', 'baltimore', 'annapolis', 'washington',
+  'boston', 'cambridge', 'somerville', 'worcester', 'springfield',
+  'providence', 'newport', 'hartford', 'new haven', 'stamford', 'bridgeport',
+  'manchester', 'nashua', 'portland maine', 'burlington', 'albany',
+  'buffalo', 'rochester', 'syracuse', 'yonkers', 'newark', 'jersey city',
+  'princeton', 'hoboken', 'trenton', 'wilmington', 'dover', 'salt lake city',
+  'provo', 'ogden', 'las vegas', 'reno', 'henderson', 'boise', 'billings',
+  'albuquerque', 'santa fe', 'oklahoma city', 'tulsa', 'little rock',
+  'new orleans', 'baton rouge', 'birmingham', 'huntsville', 'montgomery',
+  'mobile', 'jackson', 'anchorage', 'honolulu', 'lincoln', 'wichita',
+  'lancaster', 'york', 'reading', 'allentown', 'bethlehem', 'scranton',
+  'erie', 'harrisburg', 'plymouth', 'portsmouth', 'bristol', 'newcastle',
+  'bath', 'exeter', 'gloucester', 'chester', 'warrington', 'carlisle',
+  'darlington', 'wakefield', 'preston', 'mansfield', 'chesterfield',
+  'winchester', 'canterbury', 'hastings', 'oxford', 'bedford', 'greenwich',
+  'stratford', 'kingston', 'richmond hill', 'brighton', 'andover',
+]);
+
+// --- Foreign ---------------------------------------------------------------
+// UK nation names. "british" is deliberately absent as a bare word: it also
+// begins "British Columbia", and the multi-word guards below cover the rest.
+const UK_SINGLE = new Set([
+  'uk', 'u.k.', 'gb', 'britain', 'england', 'scotland', 'wales', 'cymru',
+  'english', 'scottish', 'welsh',
+]);
+
+const UK_MULTIWORD = [
+  'united kingdom', 'great britain', 'northern ireland', 'u. k.', 'the uk',
+];
+
+// UK counties and regions — distinctly British as bare words.
+const UK_COUNTY = new Set([
   'bedfordshire', 'berkshire', 'buckinghamshire', 'cambridgeshire', 'cheshire',
-  'cornwall', 'cumbria', 'derbyshire', 'devon', 'dorset', 'durham', 'essex',
+  'cornwall', 'cumbria', 'derbyshire', 'devon', 'dorset', 'essex',
   'gloucestershire', 'hampshire', 'herefordshire', 'hertfordshire', 'kent',
   'lancashire', 'leicestershire', 'lincolnshire', 'merseyside', 'norfolk',
   'northamptonshire', 'northumberland', 'nottinghamshire', 'oxfordshire',
   'rutland', 'shropshire', 'somerset', 'staffordshire', 'suffolk', 'surrey',
-  'warwickshire', 'wiltshire', 'worcestershire', 'yorkshire', 'midlands',
-  'anglesey', 'ceredigion', 'conwy', 'denbighshire', 'flintshire', 'gwynedd',
+  'warwickshire', 'wiltshire', 'worcestershire', 'yorkshire', 'anglesey',
+  'ceredigion', 'conwy', 'denbighshire', 'flintshire', 'gwynedd',
   'monmouthshire', 'pembrokeshire', 'powys', 'wrexham', 'clwyd', 'dyfed',
   'gwent', 'glamorgan', 'aberdeenshire', 'angus', 'argyll', 'ayrshire',
-  'clackmannanshire', 'dumfriesshire', 'fife', 'inverness-shire', 'lanarkshire',
-  'lothian', 'midlothian', 'moray', 'perthshire', 'renfrewshire',
-  'stirlingshire', 'antrim', 'armagh', 'fermanagh', 'londonderry', 'tyrone',
+  'clackmannanshire', 'dumfriesshire', 'fife', 'inverness-shire',
+  'lanarkshire', 'lothian', 'midlothian', 'moray', 'perthshire',
+  'renfrewshire', 'stirlingshire', 'antrim', 'armagh', 'fermanagh',
+  'londonderry', 'tyrone',
 ]);
 
-const COUNTY_MULTIWORD = [
+const UK_MULTIWORD_PLACE = [
   'east sussex', 'west sussex', 'north yorkshire', 'south yorkshire',
   'west yorkshire', 'east yorkshire', 'west midlands', 'east midlands',
   'greater london', 'greater manchester', 'tyne and wear', 'isle of wight',
@@ -56,100 +135,76 @@ const COUNTY_MULTIWORD = [
   'north west england', 'south east england', 'south west england',
   'north east england', 'home counties', 'scottish highlands',
   'vale of glamorgan', 'north lanarkshire', 'south lanarkshire',
-  'east lothian', 'west lothian', 'dumfries and galloway',
+  'east lothian', 'west lothian', 'dumfries and galloway', 'milton keynes',
+  'stoke-on-trent', 'newcastle upon tyne', 'kingston upon hull',
+  'brighton and hove', 'st albans', 'southend-on-sea',
 ];
 
-const UK_COUNTRY_SUBSTR = [
-  'united kingdom', 'great britain', 'u.k.', 'u. k.',
-];
-
-// Major UK cities + tech hubs. Extend at runtime via data/uk-cities.txt.
-const UK_CITIES = new Set<string>([
-  'london', 'birmingham', 'manchester', 'leeds', 'glasgow', 'liverpool',
-  'newcastle', 'newcastle upon tyne', 'sheffield', 'bristol', 'belfast',
-  'edinburgh', 'cardiff', 'nottingham', 'leicester', 'coventry', 'bradford',
-  'stoke-on-trent', 'stoke on trent', 'wolverhampton', 'plymouth',
-  'southampton', 'reading', 'derby', 'portsmouth', 'brighton',
-  'brighton and hove', 'hull', 'kingston upon hull', 'preston', 'luton',
-  'milton keynes', 'northampton', 'norwich', 'swindon', 'oxford', 'cambridge',
-  'york', 'bath', 'exeter', 'gloucester', 'ipswich', 'peterborough', 'slough',
-  'watford', 'basildon', 'bournemouth', 'poole', 'blackpool', 'blackburn',
-  'bolton', 'stockport', 'oldham', 'rochdale', 'salford', 'wigan', 'warrington',
-  'huddersfield', 'wakefield', 'doncaster', 'rotherham', 'barnsley',
-  'sunderland', 'middlesbrough', 'darlington', 'carlisle', 'lancaster',
-  'chester', 'crewe', 'shrewsbury', 'telford', 'worcester', 'hereford',
-  'cheltenham', 'swansea', 'newport', 'aberdeen', 'dundee', 'stirling',
-  'inverness', 'perth', 'paisley', 'livingston', 'derry', 'lisburn',
-  'st albans', 'st. albans', 'chelmsford', 'colchester', 'southend',
-  'southend-on-sea', 'maidstone', 'canterbury', 'guildford', 'woking',
-  'crawley', 'eastbourne', 'hastings', 'worthing', 'basingstoke', 'winchester',
-  'salisbury', 'truro', 'torquay', 'lincoln', 'grimsby', 'scunthorpe',
-  'mansfield', 'chesterfield', 'burnley', 'bury', 'halifax', 'harrogate',
-  'scarborough', 'redditch', 'solihull', 'walsall', 'dudley', 'west bromwich',
-  'sutton coldfield', 'stevenage', 'harlow', 'hemel hempstead', 'high wycombe',
-  'aylesbury', 'bracknell', 'farnborough', 'newbury', 'hatfield', 'welwyn',
-  'croydon', 'wimbledon', 'shoreditch', 'canary wharf', 'westminster',
-  'camden', 'islington', 'hackney', 'greenwich', 'richmond upon thames',
-  'kingston upon thames', 'ealing', 'wembley', 'stratford', 'silicon roundabout',
+// UK cities WITHOUT a notable US counterpart. Anything shared (Boston,
+// Cambridge, Manchester, Birmingham, Durham, York, Reading...) is left out on
+// purpose — see the header.
+const UK_CITIES = new Set([
+  'london', 'edinburgh', 'glasgow', 'cardiff', 'belfast', 'liverpool', 'leeds',
+  'sheffield', 'nottingham', 'leicester', 'coventry', 'bradford',
+  'wolverhampton', 'southampton', 'norwich', 'swansea', 'aberdeen', 'dundee',
+  'inverness', 'ipswich', 'luton', 'slough', 'croydon', 'blackpool',
+  'blackburn', 'oldham', 'rochdale', 'salford', 'wigan', 'huddersfield',
+  'doncaster', 'rotherham', 'barnsley', 'sunderland', 'middlesbrough', 'crewe',
+  'shrewsbury', 'telford', 'cheltenham', 'harrogate', 'scarborough',
+  'solihull', 'walsall', 'dudley', 'stevenage', 'harlow', 'aylesbury',
+  'bracknell', 'farnborough', 'wembley', 'wimbledon', 'shoreditch',
+  'canary wharf', 'westminster', 'islington', 'hackney', 'ealing', 'bolton',
+  'paisley', 'livingston', 'lisburn', 'derry', 'truro', 'torquay', 'grimsby',
+  'scunthorpe', 'burnley', 'redditch', 'basingstoke', 'guildford', 'woking',
+  'crawley', 'eastbourne', 'worthing', 'maidstone', 'colchester', 'chelmsford',
+  'peterborough', 'swindon', 'bournemouth', 'poole', 'basildon', 'watford',
+  'hemel hempstead', 'high wycombe', 'welwyn', 'hatfield', 'stockport',
+  'west bromwich', 'sutton coldfield', 'hereford', 'salisbury',
 ]);
 
 const FOREIGN_SINGLE = new Set([
   // countries
-  'usa', 'us', 'america', 'canada', 'mexico', 'brazil', 'argentina', 'chile',
-  'colombia', 'peru', 'venezuela', 'ecuador', 'uruguay', 'bolivia', 'paraguay',
-  'ireland', 'eire', 'france', 'germany', 'spain', 'portugal', 'italy',
-  'netherlands', 'holland', 'belgium', 'switzerland', 'austria', 'sweden',
-  'norway', 'denmark', 'finland', 'iceland', 'poland', 'ukraine', 'russia',
-  'romania', 'bulgaria', 'hungary', 'greece', 'turkey', 'serbia', 'croatia',
-  'slovakia', 'slovenia', 'lithuania', 'latvia', 'estonia', 'belarus', 'india',
-  'pakistan', 'bangladesh', 'nepal', 'china', 'japan', 'korea', 'vietnam',
-  'thailand', 'indonesia', 'malaysia', 'singapore', 'philippines', 'taiwan',
-  'australia', 'zealand', 'egypt', 'nigeria', 'kenya', 'ghana', 'ethiopia',
-  'morocco', 'algeria', 'tunisia', 'israel', 'iran', 'iraq', 'lebanon',
-  'jordan', 'kuwait', 'qatar', 'bahrain', 'oman', 'afghanistan', 'kazakhstan',
+  'canada', 'mexico', 'brazil', 'argentina', 'chile', 'colombia', 'peru',
+  'venezuela', 'ecuador', 'uruguay', 'bolivia', 'paraguay', 'ireland', 'eire',
+  'france', 'germany', 'spain', 'portugal', 'italy', 'netherlands', 'holland',
+  'belgium', 'switzerland', 'austria', 'sweden', 'norway', 'denmark',
+  'finland', 'iceland', 'poland', 'ukraine', 'russia', 'romania', 'bulgaria',
+  'hungary', 'greece', 'turkey', 'serbia', 'croatia', 'slovakia', 'slovenia',
+  'lithuania', 'latvia', 'estonia', 'belarus', 'india', 'pakistan',
+  'bangladesh', 'nepal', 'china', 'japan', 'korea', 'vietnam', 'thailand',
+  'indonesia', 'malaysia', 'singapore', 'philippines', 'taiwan', 'australia',
+  'zealand', 'egypt', 'nigeria', 'kenya', 'ghana', 'ethiopia', 'morocco',
+  'algeria', 'tunisia', 'israel', 'iran', 'iraq', 'lebanon', 'jordan',
+  'kuwait', 'qatar', 'bahrain', 'oman', 'afghanistan', 'kazakhstan',
   'uzbekistan', 'azerbaijan', 'armenia', 'cambodia', 'myanmar', 'laos',
-  'mongolia', 'srilanka', 'cuba', 'jamaica', 'panama', 'guatemala', 'honduras',
-  'nicaragua', 'costa', 'europe', 'asia', 'africa',
-  // US states (single-word) — the biggest source of homonym confusion
-  'alabama', 'alaska', 'arizona', 'arkansas', 'california', 'colorado',
-  'connecticut', 'delaware', 'florida', 'georgia', 'hawaii', 'idaho', 'illinois',
-  'indiana', 'iowa', 'kansas', 'kentucky', 'louisiana', 'maine', 'maryland',
-  'massachusetts', 'michigan', 'minnesota', 'mississippi', 'missouri', 'montana',
-  'nebraska', 'nevada', 'ohio', 'oklahoma', 'oregon', 'pennsylvania', 'tennessee',
-  'texas', 'utah', 'vermont', 'virginia', 'wisconsin', 'wyoming',
-  // unambiguous foreign cities (no notable UK homonyms)
+  'mongolia', 'srilanka', 'cuba', 'jamaica', 'panama', 'guatemala',
+  'honduras', 'nicaragua', 'europe', 'asia', 'africa',
+  // foreign cities with no notable US counterpart
   'tokyo', 'seoul', 'beijing', 'shanghai', 'shenzhen', 'guangzhou', 'mumbai',
-  'bengaluru', 'bangalore', 'hyderabad', 'chennai', 'kolkata', 'pune', 'delhi',
-  'karachi', 'lahore', 'dhaka', 'jakarta', 'bangkok', 'hanoi', 'istanbul',
-  'tehran', 'baghdad', 'riyadh', 'jeddah', 'nairobi', 'lagos', 'johannesburg',
-  'toronto', 'montreal', 'ottawa', 'calgary', 'edmonton', 'winnipeg', 'munich',
-  'frankfurt', 'hamburg', 'stuttgart', 'cologne', 'lyon', 'marseille',
-  'barcelona', 'lisbon', 'zurich', 'geneva', 'copenhagen', 'stockholm', 'oslo',
-  'helsinki', 'warsaw', 'krakow', 'prague', 'budapest', 'bucharest', 'sofia',
-  'kyiv', 'kiev', 'minsk', 'sydney', 'melbourne', 'brisbane', 'perth',
-  'auckland', 'wellington', 'sao', 'medellin', 'bogota', 'guadalajara',
-  'dublin', 'cork', 'galway', 'amsterdam', 'rotterdam', 'brussels', 'vienna',
-  'madrid', 'milan', 'rome', 'naples', 'berlin', 'paris', 'nyc', 'sf',
-  'seattle', 'chicago', 'houston', 'dallas', 'austin', 'denver', 'atlanta',
-  'philadelphia', 'phoenix', 'miami', 'brooklyn', 'manhattan',
+  'bengaluru', 'bangalore', 'hyderabad', 'chennai', 'kolkata', 'pune',
+  'delhi', 'karachi', 'lahore', 'dhaka', 'jakarta', 'bangkok', 'hanoi',
+  'istanbul', 'tehran', 'baghdad', 'riyadh', 'jeddah', 'nairobi', 'lagos',
+  'johannesburg', 'toronto', 'montreal', 'ottawa', 'calgary', 'edmonton',
+  'winnipeg', 'vancouver', 'munich', 'frankfurt', 'hamburg', 'stuttgart',
+  'cologne', 'lyon', 'marseille', 'barcelona', 'lisbon', 'zurich', 'geneva',
+  'copenhagen', 'stockholm', 'oslo', 'helsinki', 'warsaw', 'krakow', 'prague',
+  'budapest', 'bucharest', 'sofia', 'kyiv', 'kiev', 'minsk', 'sydney',
+  'melbourne', 'brisbane', 'auckland', 'wellington', 'medellin', 'bogota',
+  'guadalajara', 'dublin', 'cork', 'galway', 'amsterdam', 'rotterdam',
+  'brussels', 'vienna', 'madrid', 'milan', 'rome', 'naples', 'berlin',
+  'paris', 'perth',
 ]);
 
 const FOREIGN_MULTIWORD = [
-  'united states', 'united states of america', 'u.s.a', 'u. s. a', 'u.s.',
-  'new york', 'new jersey', 'new mexico', 'new hampshire', 'north carolina',
-  'south carolina', 'north dakota', 'south dakota', 'west virginia',
-  'rhode island', 'district of columbia', 'washington dc', 'washington, dc',
-  'san francisco', 'los angeles', 'san diego', 'san jose', 'silicon valley',
-  'bay area', 'las vegas', 'new orleans', 'salt lake city', 'palo alto',
-  'mountain view', 'menlo park', 'new zealand', 'south korea', 'north korea',
-  'south africa', 'saudi arabia', 'united arab emirates', 'hong kong',
-  'costa rica', 'el salvador', 'dominican republic', 'puerto rico', 'sri lanka',
-  'czech republic', 'sao paulo', 'rio de janeiro', 'buenos aires', 'mexico city',
-  'ho chi minh', 'kuala lumpur', 'tel aviv', 'abu dhabi', 'south america',
-  'latin america', 'republic of ireland',
+  'new zealand', 'south korea', 'north korea', 'south africa', 'saudi arabia',
+  'united arab emirates', 'hong kong', 'costa rica', 'el salvador',
+  'dominican republic', 'sri lanka', 'czech republic', 'sao paulo',
+  'rio de janeiro', 'buenos aires', 'mexico city', 'ho chi minh',
+  'kuala lumpur', 'tel aviv', 'abu dhabi', 'south america', 'latin america',
+  'republic of ireland', 'new south wales',
 ];
 
-// Canadian provinces — "London, Ontario" and "Surrey, BC" are the common traps.
+// Canadian provinces — "London, Ontario" and "Vancouver, BC" are the traps.
 const CA_PROVINCE_SINGLE = new Set([
   'ontario', 'quebec', 'québec', 'alberta', 'manitoba', 'saskatchewan',
   'newfoundland', 'labrador', 'yukon', 'nunavut',
@@ -160,12 +215,10 @@ const CA_PROVINCE_MULTIWORD = [
   'northwest territories',
 ];
 
-// Province abbreviations, matched only as a standalone segment ("Surrey, BC").
 const CA_PROVINCE_ABBR = new Set([
   'AB', 'BC', 'MB', 'NB', 'NL', 'NS', 'NT', 'NU', 'ON', 'PE', 'QC', 'SK', 'YT',
 ]);
 
-// US state abbreviations, matched as a standalone segment ("Boston, MA").
 const US_STATE_ABBR = new Set([
   'AL', 'AK', 'AZ', 'AR', 'CA', 'CO', 'CT', 'DE', 'FL', 'GA', 'HI', 'ID', 'IL',
   'IN', 'IA', 'KS', 'KY', 'LA', 'ME', 'MD', 'MA', 'MI', 'MN', 'MS', 'MO', 'MT',
@@ -173,30 +226,28 @@ const US_STATE_ABBR = new Set([
   'SC', 'SD', 'TN', 'TX', 'UT', 'VT', 'VA', 'WA', 'WV', 'WI', 'WY', 'DC',
 ]);
 
-// Abbreviations that are also ordinary words ("Co. Durham", "Kingston, Ont" ->
-// "on"), or common in non-US addresses. Safe as a comma-delimited segment, NOT
-// safe as a loose word, so word-level matching skips them.
+// Abbreviations that are also ordinary words. Safe as a comma-delimited
+// segment, NOT safe as a loose word, so the word-level pass skips them.
 const ABBR_AMBIGUOUS_AS_WORD = new Set([
   'al', 'ca', 'co', 'de', 'hi', 'id', 'in', 'la', 'me', 'ms', 'oh', 'ok', 'or',
-  'pa', 'on', 'ne', 'nt', 'nu', 'pe',
+  'pa', 'ne', 'nv', 'md', 'mo', 'mt', 'sc', 'sd',
 ]);
 
-// Abbreviations safe to match without a comma, so "Durham NC 27705" is caught.
 const US_STATE_ABBR_WORD = new Set(
   [...US_STATE_ABBR].filter((a) => !ABBR_AMBIGUOUS_AS_WORD.has(a.toLowerCase())),
 );
 
-// A UK postcode (full "SW1A 1AA" or outward code "EC2A") is a definitive signal.
-const UK_POSTCODE = /\b[a-z]{1,2}\d[a-z\d]?\s*\d[a-z]{2}\b/i;
+// A five-digit ZIP, optionally ZIP+4. Tier 3 only — see the header.
+const US_ZIP = /\b\d{5}(?:-\d{4})?\b/;
 
-// Optional runtime extension: data/uk-cities.txt, one city name per line.
+// Optional runtime extension: data/us-cities.txt, one city name per line.
 function loadExtraCities(): void {
-  const path = './data/uk-cities.txt';
+  const path = './data/us-cities.txt';
   try {
     if (!existsSync(path)) return;
     for (const line of readFileSync(path, 'utf8').split(/\r?\n/)) {
       const name = line.trim().toLowerCase();
-      if (name) UK_CITIES.add(name);
+      if (name) US_CITIES.add(name);
     }
   } catch {
     /* ignore a bad/locked file */
@@ -204,13 +255,24 @@ function loadExtraCities(): void {
 }
 loadExtraCities();
 
-/** All known UK counties + cities, for use as GitHub search location facets. */
-export function getUkSearchLocations(): string[] {
-  return [...COUNTY_SINGLE, ...COUNTY_MULTIWORD, ...UK_CITIES];
+// Nation-level facets. Kept separate from US_SINGLE because that set holds
+// adjectives and shorthands ('american', 'us') that make poor `location:`
+// queries.
+const NATION_FACETS = ['United States', 'USA', 'America'];
+
+/**
+ * All known US nations + states + cities, for use as GitHub search location
+ * facets. The country and state names matter most: they are the commonest
+ * thing a US user types, so leaving them out loses whoever wrote only "USA".
+ */
+export function getUsSearchLocations(): string[] {
+  // Deduped: a few names are both a state and a city ("washington"), and a
+  // repeated facet would issue the same search twice and burn API quota.
+  return [...new Set([...NATION_FACETS, ...STATE_MULTIWORD, ...STATE_SINGLE, ...US_CITIES])];
 }
 
-/** True if the location is empty/unknown or looks like it's in the UK. */
-export function isUkOrEmpty(location: string | null | undefined): boolean {
+/** True if the location is empty/unknown or looks like it's in the US. */
+export function isUsOrEmpty(location: string | null | undefined): boolean {
   if (!location) return true;
   const raw = location.trim();
   if (!raw) return true;
@@ -218,38 +280,40 @@ export function isUkOrEmpty(location: string | null | undefined): boolean {
   const segs = s.split(/[,/|;•·]+/).map((t) => t.trim()).filter(Boolean);
   const words = s.split(/[^a-z]+/).filter(Boolean);
 
-  // 1. Definitive UK signals — unambiguous, so they outrank everything below.
-  if (UK_COUNTRY_SUBSTR.some((k) => s.includes(k))) return true;
-  if (NATION_MULTIWORD.some((n) => s.includes(n))) return true;
-  if (segs.some((seg) => NATION_SINGLE.has(seg))) return true;
-  if (words.some((w) => NATION_SINGLE.has(w))) return true; // e.g. "London England"
-  if (COUNTY_MULTIWORD.some((n) => s.includes(n))) return true; // e.g. "County Durham"
-  if (UK_POSTCODE.test(s)) return true;
+  // 1. Definitive US signals — unambiguous, so they outrank everything below.
+  if (US_MULTIWORD.some((k) => s.includes(k))) return true;
+  if (STATE_MULTIWORD.some((k) => s.includes(k))) return true;
+  if (segs.some((seg) => US_SINGLE.has(seg))) return true;
+  if (words.some((w) => US_SINGLE.has(w))) return true;
+  // A bare two-letter segment: "Paris, TX" is Texas, not France. Checked here,
+  // ahead of the foreign pass, because the abbreviation is the stronger signal.
+  if (
+    segs.some((seg) => seg.length === 2 && US_STATE_ABBR.has(seg.toUpperCase()) &&
+      !CA_PROVINCE_ABBR.has(seg.toUpperCase()))
+  ) {
+    return true;
+  }
 
-  // 2. Explicit foreign signals -> drop. Ahead of the bare county/city pass so a
-  //    foreign qualifier beats a homonym: "Durham, NC" is North Carolina, not
-  //    the county; "Boston, Lincolnshire" has no such qualifier and survives.
+  // 2. Explicit foreign signals -> drop.
+  if (UK_MULTIWORD.some((k) => s.includes(k))) return false;
+  if (UK_MULTIWORD_PLACE.some((k) => s.includes(k))) return false;
   if (FOREIGN_MULTIWORD.some((f) => s.includes(f))) return false;
   if (CA_PROVINCE_MULTIWORD.some((f) => s.includes(f))) return false;
+  if (segs.some((seg) => UK_SINGLE.has(seg))) return false;
+  if (words.some((w) => UK_SINGLE.has(w))) return false;
+  if (words.some((w) => UK_COUNTY.has(w))) return false;
+  if (segs.some((seg) => UK_CITIES.has(seg)) || UK_CITIES.has(s)) return false;
   if (segs.some((seg) => FOREIGN_SINGLE.has(seg))) return false;
   if (words.some((w) => FOREIGN_SINGLE.has(w))) return false;
   if (words.some((w) => CA_PROVINCE_SINGLE.has(w))) return false;
-  if (
-    segs.some((seg) => {
-      if (seg.length !== 2) return false;
-      const abbr = seg.toUpperCase();
-      return US_STATE_ABBR.has(abbr) || CA_PROVINCE_ABBR.has(abbr);
-    })
-  ) {
-    return false;
-  }
-  // Comma-less "Durham NC 27705" / "Austin TX" — restricted to abbreviations
-  // that aren't ordinary words, so "Co. Durham" isn't read as Colorado.
-  if (words.some((w) => w.length === 2 && US_STATE_ABBR_WORD.has(w.toUpperCase()))) return false;
+  if (segs.some((seg) => seg.length === 2 && CA_PROVINCE_ABBR.has(seg.toUpperCase()))) return false;
 
-  // 3. Ambiguous UK signals — bare county or city name, no foreign qualifier.
-  if (words.some((w) => COUNTY_SINGLE.has(w))) return true; // e.g. "Boston Lincolnshire"
-  if (segs.some((seg) => UK_CITIES.has(seg)) || UK_CITIES.has(s)) return true;
+  // 3. Ambiguous US signals — a bare state or city, a ZIP, or a comma-less
+  //    abbreviation, now that tier 2 has ruled out a foreign qualifier.
+  if (words.some((w) => STATE_SINGLE.has(w))) return true;
+  if (segs.some((seg) => US_CITIES.has(seg)) || US_CITIES.has(s)) return true;
+  if (words.some((w) => w.length === 2 && US_STATE_ABBR_WORD.has(w.toUpperCase()))) return true;
+  if (US_ZIP.test(s)) return true;
 
   // 4. Unknown, non-empty -> drop
   return false;

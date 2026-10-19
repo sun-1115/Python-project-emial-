@@ -1,5 +1,5 @@
 import 'dotenv/config';
-import { getUkSearchLocations } from './location.js';
+import { getUsSearchLocations } from './location.js';
 
 function optNum(value: string | undefined): number | undefined {
   if (!value) return undefined;
@@ -21,12 +21,12 @@ const VALID_LANGUAGES = new Set([
   'r', 'shell', 'objective-c', 'html', 'css', 'lua', 'clojure', 'erlang',
 ]);
 
-/** Default UK location variants (free-text field, so we cast a wide net). */
-const DEFAULT_UK_LOCATIONS = [
-  'United Kingdom', 'UK', 'England', 'Scotland', 'Wales', 'Northern Ireland',
-  'London', 'Manchester', 'Birmingham', 'Edinburgh', 'Glasgow', 'Bristol',
-  'Leeds', 'Liverpool', 'Cambridge', 'Oxford', 'Cardiff', 'Belfast',
-  'Brighton', 'Sheffield', 'Newcastle', 'Nottingham',
+/** Default US location variants (free-text field, so we cast a wide net). */
+const DEFAULT_US_LOCATIONS = [
+  'United States', 'USA', 'California', 'New York', 'Texas', 'Washington',
+  'Massachusetts', 'Illinois', 'Colorado', 'Florida', 'Georgia', 'Virginia',
+  'San Francisco', 'New York City', 'Seattle', 'Austin', 'Boston', 'Chicago',
+  'Los Angeles', 'Denver', 'Atlanta', 'Portland',
 ];
 
 export interface AppConfig {
@@ -61,6 +61,10 @@ export interface AppConfig {
   maxContributorsPerRepo: number;
   maxTotalUsers: number;
   maxRepoSizeMb: number;
+  skipExistingUsers: boolean; // don't spend an API call on a login already stored
+  refetchAfterDays: number; // >0 = refresh a stored user once it's this stale
+  skipCrawledSeeds: boolean; // don't re-walk a seed's repos once they've been walked
+  recrawlSeedsAfterDays: number; // >0 = walk a seed's repos again once this stale
 
   // ui
   uiPort: number;
@@ -73,15 +77,18 @@ export function loadConfig(): AppConfig {
   }
 
   // Locations: both SEARCH_LOCATIONS and SEARCH_LOCATION accept a comma list.
-  // With SEARCH_ALL_UK=true, also fold in every UK county + city (from location.ts)
+  // With SEARCH_ALL_US=true, also fold in every US state + city (from location.ts)
   // as search facets — hundreds of slices to beat the 1000-per-query cap.
   const locList = [...csv(process.env.SEARCH_LOCATIONS), ...csv(process.env.SEARCH_LOCATION)];
-  const useAllUk = (process.env.SEARCH_ALL_UK ?? '').toLowerCase() === 'true';
-  const locations = useAllUk
-    ? [...new Set([...getUkSearchLocations(), ...locList])]
+  // SEARCH_ALL_UK is still read so an existing .env keeps working after the
+  // retarget; SEARCH_ALL_US is the name to use going forward.
+  const allFlag = process.env.SEARCH_ALL_US ?? process.env.SEARCH_ALL_UK ?? '';
+  const useAllUs = allFlag.toLowerCase() === 'true';
+  const locations = useAllUs
+    ? [...new Set([...getUsSearchLocations(), ...locList])]
     : locList.length > 0
       ? [...new Set(locList)]
-      : DEFAULT_UK_LOCATIONS;
+      : DEFAULT_US_LOCATIONS;
 
   const languages = csv(process.env.SEARCH_LANGUAGE)
     .map((l) => l.toLowerCase())
@@ -123,6 +130,17 @@ export function loadConfig(): AppConfig {
     // Skip repos bigger than this (MB) — huge clones (Linux, etc.) can't list
     // contributors and waste ~10s each. 0 disables the check.
     maxRepoSizeMb: optNum(process.env.MAX_REPO_SIZE_MB) ?? 300,
+    // With a six-figure database most logins the crawler meets are ones it
+    // already has, and each costs a profile call before anything can be
+    // decided. Skipping them is where the crawl budget is won back.
+    skipExistingUsers: (process.env.SKIP_EXISTING_USERS ?? 'true').toLowerCase() !== 'false',
+    refetchAfterDays: optNum(process.env.REFETCH_AFTER_DAYS) ?? 0,
+    // Walking a seed's repos costs one call per seed plus one per repo — far
+    // more than the single profile call above, so re-walking known seeds is the
+    // larger waste. The trade-off is that new contributors on an already-walked
+    // seed go unseen until RECRAWL_SEEDS_AFTER_DAYS lets it round again.
+    skipCrawledSeeds: (process.env.SKIP_CRAWLED_SEEDS ?? 'true').toLowerCase() !== 'false',
+    recrawlSeedsAfterDays: optNum(process.env.RECRAWL_SEEDS_AFTER_DAYS) ?? 0,
 
     uiPort: optNum(process.env.UI_PORT) ?? 3000,
   };
@@ -131,7 +149,7 @@ export function loadConfig(): AppConfig {
 /**
  * Build the faceted list of GitHub user-search queries.
  * One query per (location × language) so each returns up to GitHub's 1000-result
- * cap — faceting is how we exceed that cap and cover the whole UK broadly.
+ * cap — faceting is how we exceed that cap and cover the whole US broadly.
  */
 export function buildQueries(cfg: AppConfig): string[] {
   const base: string[] = [];
