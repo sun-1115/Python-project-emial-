@@ -2,7 +2,7 @@ import type { AppConfig } from './config.js';
 import { buildQueries, buildBaseFacets } from './config.js';
 import { GitHubClient, isExcludedEmployer } from './github.js';
 import { UserStore } from './db.js';
-import { isUkOrEmpty } from './location.js';
+import { isUsOrEmpty } from './location.js';
 
 /** Fast/breadth seeding: sample a few seeds from many location×language×era slices. */
 async function facetedSeed(
@@ -86,7 +86,7 @@ async function deepSeed(
 
 /**
  * One crawl run:
- *   1. Faceted UK search (location × language) → seed usernames.
+ *   1. Faceted US search (location × language) → seed usernames.
  *   2. For each seed: list non-fork repos → list each repo's contributors.
  *   3. Save EVERY discovered user (seed + contributor), any/no location.
  * No recursion: we never crawl the contributors' own repositories.
@@ -97,6 +97,8 @@ export async function runCrawl(config: AppConfig, cycle = 0): Promise<void> {
   const stamp = () => new Date().toISOString();
   const seen = new Set<string>(); // logins whose profile we've fetched this run
   let saved = 0;
+  let skippedKnown = 0; // logins already in the DB, skipped before any API call
+  let skippedSeeds = 0; // seeds whose repos were already walked in an earlier run
 
   const saveUser = async (
     login: string,
@@ -105,6 +107,12 @@ export async function runCrawl(config: AppConfig, cycle = 0): Promise<void> {
     if (seen.has(login)) return false;
     if (saved >= config.maxTotalUsers) return false;
     seen.add(login);
+    // Skip a login we already hold, BEFORE getProfile spends a request on it.
+    // Set REFETCH_AFTER_DAYS>0 to let stale rows refresh anyway.
+    if (config.skipExistingUsers && store.hasFreshUser(login, config.refetchAfterDays)) {
+      skippedKnown++;
+      return false;
+    }
     try {
       // Cheap fetch first (1 call) so we can drop by date/location BEFORE the
       // more expensive email/telegram enrichment.
@@ -115,8 +123,8 @@ export async function runCrawl(config: AppConfig, cycle = 0): Promise<void> {
       // creation date is also dropped (can't prove it's old).
       const created = profile.github_created_at;
       if (!created || created.slice(0, 10) >= config.createdBefore) return false;
-      // Keep only users with no location or a UK location; drop foreign ones.
-      if (!isUkOrEmpty(profile.location)) return false;
+      // Keep only users with no location or a US location; drop foreign ones.
+      if (!isUsOrEmpty(profile.location)) return false;
       // Skip people who work at an excluded employer (Google / Upwork / Freelancer).
       // Cheap company-field check first, before spending calls on enrichment.
       if (isExcludedEmployer(profile.company)) return false;
@@ -141,7 +149,7 @@ export async function runCrawl(config: AppConfig, cycle = 0): Promise<void> {
   };
 
   try {
-    // --- 1. Seed search (UK) ---
+    // --- 1. Seed search (US) ---
     const seeds = config.deepSplit
       ? await deepSeed(config, client, store, stamp)
       : await facetedSeed(config, client, cycle, stamp);
@@ -154,12 +162,22 @@ export async function runCrawl(config: AppConfig, cycle = 0): Promise<void> {
 
       if (!config.crawlEnabled) continue;
 
+      // Skip a seed whose repos we already walked. This is the expensive half of
+      // a cycle — one call to list the repos, then one per repo to list its
+      // contributors — so skipping it saves far more than the profile call does.
+      if (config.skipCrawledSeeds && store.seedCrawled(seed, config.recrawlSeedsAfterDays)) {
+        skippedSeeds++;
+        continue;
+      }
+
       // A failure here (e.g. the network dropped and retries were exhausted) skips
       // this seed's repos rather than aborting the whole crawl.
       let repos;
       try {
         repos = await client.listUserRepos(seed, config.maxReposPerUser, config.maxRepoSizeMb);
       } catch (err) {
+        // Deliberately not marked as crawled: the walk never happened, so the
+        // next cycle should retry it rather than write it off.
         console.warn(`Skipping repos for ${seed}: ${(err as Error).message}`);
         continue;
       }
@@ -175,10 +193,13 @@ export async function runCrawl(config: AppConfig, cycle = 0): Promise<void> {
           await saveUser(login, 'contributor');
         }
       }
+      // Marked only after the walk actually completed.
+      store.markSeedCrawled(seed, repos.length);
     }
 
     console.log(
       `[${stamp()}] Run complete. Saved/updated ${saved} users this run. ` +
+        `Skipped ${skippedKnown} already-known login(s) and ${skippedSeeds} already-walked seed(s). ` +
         `Total in DB: ${store.count()}.`
     );
   } finally {

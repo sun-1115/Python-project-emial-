@@ -13,7 +13,7 @@ import { load } from './_dist.mjs';
 
 const { loadConfig } = await load('config.js');
 const { UserStore } = await load('db.js');
-const { isUkOrEmpty } = await load('location.js');
+const { isUsOrEmpty } = await load('location.js');
 
 const apply = process.argv.includes('--apply');
 const cfg = loadConfig();
@@ -21,7 +21,7 @@ const store = new UserStore(cfg.dbPath);
 
 // Inspect first: purge() deletes, so the dry run must not call it.
 const rows = store.allLocations();
-const doomed = rows.filter((r) => !isUkOrEmpty(r.location));
+const doomed = rows.filter((r) => !isUsOrEmpty(r.location));
 
 if (doomed.length === 0) {
   console.log(`All ${rows.length} users pass the current filter. Nothing to purge.`);
@@ -42,5 +42,5 @@ if (!apply) {
   process.exit(0);
 }
 
-const removed = store.purge(isUkOrEmpty);
+const removed = store.purge(isUsOrEmpty);
 console.log(`\nDeleted ${removed} users. ${rows.length - removed} remain.`);

@@ -81,84 +81,190 @@
     .count { color: var(--muted); font-size: 13px; white-space: nowrap; }
     .count b { color: var(--text); }
 
-    main { max-width: 1240px; margin: 0 auto; padding: 24px; }
+    main { max-width: 1440px; margin: 0 auto; padding: 18px 22px 48px; }
+
+    /* One column template, shared by the sticky header and every row, so the
+       whole list stays aligned and the eye can scan straight down a column
+       instead of hunting across a wide, mostly-empty row. */
+    :root {
+      --cols: 62px minmax(190px, 1.5fr) minmax(130px, 1.1fr) 78px minmax(230px, 1.8fr) 118px 34px;
+    }
+
+    .listhead, .card {
+      display: grid; grid-template-columns: var(--cols);
+      align-items: center; gap: 13px;
+    }
+    .listhead {
+      position: sticky; top: 0; z-index: 5;
+      padding: 9px 15px; margin-bottom: 8px;
+      font-size: 10.5px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase;
+      color: var(--muted);
+      background: rgba(13,16,23,.9); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
+      border: 1px solid var(--border); border-radius: 11px;
+    }
+    .listhead .r { text-align: right; }
+
+    /* A single bordered surface with hairline dividers reads as one list;
+       separate floating cards fragment it and waste vertical space. */
     #grid {
-      display: grid; gap: 14px;
-      grid-template-columns: repeat(3, minmax(0, 1fr)); /* 3 users per row */
+      display: flex; flex-direction: column;
+      border: 1px solid var(--border); border-radius: 13px; overflow: hidden;
+      background: var(--card);
     }
-    @media (max-width: 760px) { #grid { grid-template-columns: 1fr; } }
     .card {
-      display: flex; gap: 14px; padding: 16px; border-radius: var(--radius);
-      background: linear-gradient(180deg, var(--card), var(--bg-soft));
-      border: 1px solid var(--border); align-items: center;
-      transition: transform .12s ease, border-color .12s ease, background .12s ease;
+      padding: 9px 15px; border-bottom: 1px solid rgba(255,255,255,.045);
+      transition: background .11s ease;
     }
-    .card:hover { transform: translateY(-3px); border-color: #33405c; background: var(--card-hover); }
+    .card:last-child { border-bottom: 0; }
+    .card:hover { background: var(--card-hover); }
+    .card.is-excluded { opacity: .62; }
+    .card.is-excluded:hover { opacity: 1; }
+
+    .pick {
+      display: flex; align-items: center; justify-content: flex-end;
+      cursor: pointer; align-self: stretch;
+    }
+    .pick input {
+      appearance: none; -webkit-appearance: none; margin: 0;
+      width: 19px; height: 19px; border-radius: 6px; position: relative;
+      border: 1.5px solid #39425440; background: rgba(255,255,255,.03);
+      cursor: pointer; flex-shrink: 0;
+      transition: border-color .12s, background .12s, box-shadow .12s;
+    }
+    .card:hover .pick input { border-color: #4a5570; }
+    .pick input:hover { border-color: #7d8aa8; background: rgba(255,255,255,.06); }
+    .pick input:checked {
+      background: #e06c6c; border-color: #e06c6c;
+    }
+    /* Machine-set (non-UK) ticks are grey, so a page of them reads as system
+       state rather than as choices you made. */
+    .pick input.auto:checked { background: #5d6880; border-color: #5d6880; }
+    /* Drawn rather than a glyph, so it stays crisp at any zoom. */
+    .pick input:checked::after {
+      content: ''; position: absolute; left: 6px; top: 2.5px;
+      width: 4px; height: 9px; border: solid #fff; border-width: 0 2px 2px 0;
+      transform: rotate(45deg);
+    }
+    .pick input:focus-visible { box-shadow: 0 0 0 3px rgba(224,108,108,.3); outline: none; }
+    .pick input:disabled { cursor: not-allowed; opacity: .18; }
+    .pick input:disabled:hover { border-color: #39425440; background: rgba(255,255,255,.03); }
+
+    /* The avatar IS the GitHub link - no separate button needed. */
+    .avlink {
+      display: block; width: 60px; height: 60px; border-radius: 50%;
+      transition: box-shadow .12s, transform .12s;
+    }
+    .avlink:hover { transform: scale(1.06); box-shadow: 0 0 0 2px var(--accent); }
     .avatar {
-      width: 60px; height: 60px; border-radius: 50%; flex-shrink: 0;
+      width: 60px; height: 60px; border-radius: 50%; display: block;
       background: var(--chip); object-fit: cover;
-      box-shadow: 0 0 0 2px var(--border), 0 6px 18px rgba(0,0,0,.35);
+      box-shadow: 0 0 0 1px var(--border);
     }
-    .info { min-width: 0; flex: 1; }
-    .info .top { display: flex; align-items: center; gap: 8px; }
-    .info a.login { color: var(--accent); text-decoration: none; font-weight: 700; font-size: 15px; }
-    .info a.login:hover { text-decoration: underline; }
-    .info .name { color: var(--text); font-size: 13.5px; margin: 1px 0 8px;
-      overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .info .name.empty { color: var(--muted); font-style: italic; }
-    .chips { display: flex; gap: 6px; flex-wrap: wrap; }
-    .chip {
-      font-size: 11.5px; padding: 3px 9px; border-radius: 999px;
-      background: var(--chip); border: 1px solid var(--border); color: var(--muted);
-      display: inline-flex; align-items: center; gap: 5px;
-    }
-    .chip.loc { color: #cdd6e6; }
-    .chip.foll { color: #ffd6a5; }
-    .email {
-      display: flex; align-items: center; gap: 7px; margin-top: 9px;
-      font-size: 13px; min-width: 0;
-    }
-    .email svg { width: 15px; height: 15px; color: var(--muted); flex-shrink: 0; }
-    .email a {
-      color: #9be59b; text-decoration: none; font-weight: 600;
+
+    .idcol { min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+    .idcol .login {
+      color: var(--accent); text-decoration: none; font-weight: 650; font-size: 13.5px;
       overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     }
-    .email a:hover { text-decoration: underline; }
-    .email.none { color: var(--muted); font-style: italic; }
-    .email .copy {
+    .idcol .login:hover { text-decoration: underline; }
+    .idcol .name {
+      color: var(--muted); font-size: 11.5px;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .idcol .name.empty { font-style: italic; opacity: .6; }
+
+    .loccol {
+      min-width: 0; font-size: 12px; color: #c2cbdb;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .loccol.empty { color: var(--muted); opacity: .45; }
+
+    /* Tabular figures so the follower counts line up as a real column. */
+    .follcol {
+      font-size: 12px; color: #ffd6a5; text-align: right;
+      font-variant-numeric: tabular-nums; white-space: nowrap;
+    }
+    .follcol.zero { color: var(--muted); opacity: .4; }
+
+    .mailcol { min-width: 0; display: flex; align-items: center; gap: 6px; font-size: 12.5px; }
+    .mailcol a.addr {
+      color: #9be59b; text-decoration: none; font-weight: 550;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .mailcol a.addr:hover { text-decoration: underline; }
+    .mailcol.none { color: var(--muted); font-style: italic; opacity: .5; font-size: 12px; }
+    .mailcol .copy {
       display: inline-flex; align-items: center; justify-content: center;
-      width: 26px; height: 26px; padding: 0; flex-shrink: 0; cursor: pointer;
-      border-radius: 7px; border: 1px solid var(--border);
-      background: var(--bg-soft); color: var(--muted);
-      transition: color .12s, border-color .12s, background .12s;
+      width: 21px; height: 21px; padding: 0; flex-shrink: 0; cursor: pointer;
+      border-radius: 6px; border: 1px solid transparent;
+      background: transparent; color: var(--muted); opacity: 0; transition: opacity .12s, color .12s;
     }
-    .email .copy svg { width: 14px; height: 14px; }
-    .email .copy:hover { color: #fff; border-color: #33405c; background: var(--card-hover); }
-    .email .copy.copied { color: #9be59b; border-color: #9be59b; }
+    .card:hover .mailcol .copy { opacity: 1; }
+    .mailcol .copy:hover { color: #fff; border-color: var(--border); }
+    .mailcol .copy.copied { color: #9be59b; opacity: 1; }
+    .mailcol .copy svg { width: 13px; height: 13px; }
+    .mailcol a.tg {
+      display: inline-flex; align-items: center; justify-content: center;
+      width: 21px; height: 21px; border-radius: 6px; flex-shrink: 0;
+      color: #7cc4ff; border: 1px solid transparent; transition: border-color .12s;
+    }
+    .mailcol a.tg:hover { border-color: var(--border); }
+    .mailcol a.tg svg { width: 13px; height: 13px; }
     .src {
-      font-size: 10px; letter-spacing: .3px; text-transform: uppercase;
-      padding: 2px 7px; border-radius: 999px; font-weight: 700; flex-shrink: 0;
+      font-size: 9.5px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase;
+      padding: 2px 6px; border-radius: 5px; flex-shrink: 0;
     }
-    .src.profile { background: rgba(155,229,155,.16); color: #9be59b; }  /* highest trust */
-    .src.commit  { background: rgba(110,168,254,.16); color: var(--accent); }
-    .src.bio     { background: rgba(255,214,165,.16); color: #ffd6a5; }  /* lowest trust */
-    .links { display: flex; gap: 8px; margin-top: 9px; flex-wrap: wrap; }
-    .links a {
-      display: inline-flex; align-items: center; gap: 5px; text-decoration: none;
-      font-size: 12px; padding: 4px 9px; border-radius: 8px;
-      border: 1px solid var(--border); background: var(--bg-soft); color: #cdd6e6;
-      transition: border-color .12s, color .12s;
+    .src.profile { background: rgba(155,229,155,.14); color: #9be59b; }
+    .src.commit  { background: rgba(110,168,254,.14); color: var(--accent); }
+    .src.bio     { background: rgba(255,214,165,.14); color: #ffd6a5; }
+
+    .state { display: flex; flex-wrap: wrap; gap: 4px; justify-content: flex-end; }
+    .sstate {
+      font-size: 10px; font-weight: 700; letter-spacing: .02em;
+      padding: 3px 8px; border-radius: 6px; white-space: nowrap;
+      display: inline-flex; align-items: center; gap: 4px;
     }
-    .links a:hover { border-color: #33405c; color: #fff; }
-    .links a.tg { color: #7cc4ff; }
-    .links a.mail { color: #9be59b; }
-    .links a svg { width: 14px; height: 14px; }
-    .pill {
-      margin-left: auto; font-size: 10.5px; letter-spacing: .3px; text-transform: uppercase;
-      padding: 3px 8px; border-radius: 999px; font-weight: 700;
+    .sstate small { font-weight: 500; opacity: .7; font-size: 9.5px; }
+    .sstate.queued   { background: rgba(110,168,254,.13); color: #9ec5ff; }
+    .sstate.sent     { background: rgba(120,220,150,.12); color: #9be5ae; }
+    .sstate.excluded { background: rgba(255,120,120,.14); color: #ffa8a8; }
+    .sstate.auto     { background: rgba(140,152,180,.14); color: #a7b2c9; }
+    .sstate.none     { background: var(--chip); color: var(--muted); }
+
+    /* Master send switch. Lives in the toolbar, so it is styled here with the
+       rest of the chrome rather than with the list rows. */
+    .switch { display: inline-flex; align-items: center; gap: 9px; white-space: nowrap;
+      padding: 8px 12px; border-radius: 11px; border: 1px solid var(--border); background: var(--bg-soft); cursor: pointer; }
+    .switch input { position: absolute; width: 0; height: 0; opacity: 0; }
+    .switch .track {
+      width: 38px; height: 21px; border-radius: 999px; background: #3a4358;
+      position: relative; transition: background .15s; flex-shrink: 0;
     }
-    .pill.seed { background: rgba(110,168,254,.16); color: var(--accent); }
-    .pill.repo { background: rgba(167,139,250,.16); color: var(--accent-2); }
+    .switch .track::after {
+      content: ''; position: absolute; top: 3px; left: 3px; width: 15px; height: 15px;
+      border-radius: 50%; background: #fff; transition: transform .15s;
+    }
+    .switch input:checked + .track { background: #4ea96b; }
+    .switch input:checked + .track::after { transform: translateX(17px); }
+    .switch input:focus-visible + .track { box-shadow: 0 0 0 3px rgba(110,168,254,.3); }
+    .switch .lbl { font-size: 13px; font-weight: 700; }
+    .switch .lbl.off { color: var(--muted); }
+    /* Below ~900px the columns stop fitting; fall back to a stacked block. */
+    @media (max-width: 900px) {
+      .listhead { display: none; }
+      .card {
+        grid-template-columns: 60px 1fr 34px;
+        grid-template-areas: 'avatar id pick' 'avatar loc pick' '. mail .' '. state .';
+        row-gap: 5px; padding: 12px 14px;
+      }
+      .pick { grid-area: pick; align-self: start; margin-top: 2px; }
+      .avlink { grid-area: avatar; align-self: start; }
+      .idcol { grid-area: id; }
+      .loccol { grid-area: loc; }
+      .mailcol { grid-area: mail; }
+      .state { grid-area: state; justify-content: flex-start; }
+      .follcol { display: none; }
+    }
 
     #status { text-align: center; color: var(--muted); padding: 60px 24px; }
 
@@ -204,7 +310,7 @@
     <div class="bar">
       <div class="brand">
         <div class="logo">GT</div>
-        <div><h1>Github Track</h1><span>USA users & collaborators</span></div>
+        <div><h1>Github Track</h1><span>US users & collaborators</span></div>
       </div>
       <nav class="nav">
         <a href="/index.html" class="active">Users</a>
@@ -236,6 +342,28 @@
           <option value="recent">Recently discovered</option>
         </optgroup>
       </select>
+      <select id="filter" title="Show only users in a given send state">
+        <optgroup label="Send state">
+          <option value="all">All users</option>
+          <option value="sendable">Queued to send</option>
+          <option value="sent">Already sent</option>
+          <option value="excluded">Excluded (any)</option>
+          <option value="excluded_manual">Excluded by me</option>
+          <option value="excluded_auto">Excluded: non-UK</option>
+          <option value="noemail">No email</option>
+        </optgroup>
+      </select>
+      <button id="excludePage" class="btn" title="Exclude every user listed on this page from the send list">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="12" cy="12" r="9"/><path d="m5.6 5.6 12.8 12.8"/>
+        </svg>
+        Exclude page
+      </button>
+      <label class="switch" title="Master switch: start or stop the email campaign">
+        <input type="checkbox" id="sendSwitch" />
+        <span class="track"></span>
+        <span class="lbl off" id="sendLbl">Sending off</span>
+      </label>
       <button id="openAll" class="btn" title="Open every user on this page in a new tab">
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>
@@ -247,6 +375,15 @@
   </header>
 
   <main>
+    <div class="listhead" id="listhead">
+      <span></span>
+      <span>User</span>
+      <span>Location</span>
+      <span class="r">Followers</span>
+      <span>Email</span>
+      <span class="r">Send state</span>
+      <span class="r">Skip</span>
+    </div>
     <div id="grid"></div>
     <div id="status"></div>
     <div class="pager" id="pager"></div>
@@ -262,8 +399,27 @@
     const pageInfoEl = document.getElementById('pageinfo');
     const searchEl = document.getElementById('search');
     const sortEl = document.getElementById('sort');
+    const filterEl = document.getElementById('filter');
+    const excludePageEl = document.getElementById('excludePage');
+    const sendSwitchEl = document.getElementById('sendSwitch');
+    const sendLblEl = document.getElementById('sendLbl');
 
-    let state = { q: '', sort: 'id', page: 1, users: [], totalPages: 1 };
+    const VALID_FILTERS = [...filterEl.options].map((o) => o.value);
+    const urlFilter = new URLSearchParams(location.search).get('filter');
+    let state = {
+      q: '', sort: 'id', page: 1,
+      filter: VALID_FILTERS.includes(urlFilter) ? urlFilter : 'all',
+      users: [], totalPages: 1,
+    };
+    filterEl.value = state.filter;
+
+    /** Keep ?filter= in step with the dropdown, without adding history entries. */
+    function syncUrl() {
+      const u = new URL(location.href);
+      if (state.filter === 'all') u.searchParams.delete('filter');
+      else u.searchParams.set('filter', state.filter);
+      history.replaceState(null, '', u);
+    }
     // Keep the dropdown's shown option in sync with the actual default sort.
     sortEl.value = state.sort;
     const openAllEl = document.getElementById('openAll');
@@ -271,55 +427,90 @@
     const esc = (s) => String(s).replace(/[&<>"']/g, (c) =>
       ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
+    // Four states, not a boolean. "no email" can never be sent, so it must not
+    // sit in the queue looking like someone still to contact; and "sent"
+    // (history) is shown alongside "excluded" (policy) rather than hidden by it.
+    // 'non-uk' is written in bulk by the US-database merge; every other reason
+    // is a deliberate per-person choice. They must not look the same, or a page
+    // of machine-set ticks reads as input you never made.
+    const isAuto = (reason) => reason === 'non-uk';
+
+    function stateHtml(hasEmail, excluded, sentAt, reason) {
+      if (!hasEmail) return '<span class="sstate none">no email</span>';
+      const out = [];
+      if (sentAt) out.push('<span class="sstate sent">sent <small>' + esc(String(sentAt).slice(0, 10)) + '</small></span>');
+      if (excluded) {
+        out.push(isAuto(reason)
+          ? '<span class="sstate auto" title="Excluded automatically: location is outside the UK">excluded <small>non-UK</small></span>'
+          : '<span class="sstate excluded" title="Excluded by you">excluded <small>by you</small></span>');
+      }
+      if (!sentAt && !excluded) out.push('<span class="sstate queued">queued</span>');
+      return out.join('');
+    }
+
     function card(u) {
       const el = document.createElement('div');
       el.className = 'card';
-      const pill = u.discovered_via === 'search'
-        ? '<span class="pill seed">seed</span>'
-        : '<span class="pill repo">via repo</span>';
-      const loc = u.location
-        ? `<span class="chip loc">📍 ${esc(u.location)}</span>` : '';
 
-      const links = [];
-      // GitHub profile link
-      links.push(`<a href="${esc(u.html_url || ('https://github.com/' + u.login))}" target="_blank" rel="noopener">
-        <svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
-        GitHub</a>`);
-      if (u.telegram) {
-        links.push(`<a class="tg" href="${esc(u.telegram)}" target="_blank" rel="noopener">
-          <svg viewBox="0 0 24 24" fill="currentColor"><path d="M22 3 2 11l6 2 2 6 3-4 5 4z"/></svg>
-          Telegram</a>`);
-      }
-      // Email is shown as its own visible address row below (not a link button).
+      const hasEmail = !!u.email;
+      const excluded = !!u.suppressed;
+      const sentAt = u.sent_at || null;
+      const reason = u.suppress_reason || null;
+      if (sentAt) el.dataset.sentAt = sentAt;
+      if (reason) el.dataset.reason = reason;
+      if (excluded && hasEmail) el.classList.add('is-excluded');
+
+      const href = u.html_url || ('https://github.com/' + u.login);
+      const pickTitle = !hasEmail
+        ? 'No email address - nothing to exclude'
+        : excluded && isAuto(reason)
+          ? 'Excluded automatically (non-UK). Untick to allow sending.'
+          : 'Tick to exclude this user from the send list';
+
+      const pick =
+        '<label class="pick" title="' + pickTitle + '">' +
+          '<input type="checkbox"' + (excluded && isAuto(reason) ? ' class="auto"' : '') +
+          ' data-email="' + esc(u.email || '') + '"' +
+          (excluded ? ' checked' : '') + (hasEmail ? '' : ' disabled') + ' />' +
+        '</label>';
+
+      // The avatar carries the GitHub link, so no separate button is needed.
+      const avatar =
+        '<a class="avlink" href="' + esc(href) + '" target="_blank" rel="noopener" title="Open @' + esc(u.login) + ' on GitHub">' +
+          '<img class="avatar" loading="lazy" src="' + esc(u.avatar_url || '') + '" alt="" />' +
+        '</a>';
+
+      const idcol =
+        '<div class="idcol">' +
+          '<a class="login" href="' + esc(href) + '" target="_blank" rel="noopener" title="@' + esc(u.login) + '">@' + esc(u.login) + '</a>' +
+          '<span class="name' + (u.name ? '' : ' empty') + '">' + (u.name ? esc(u.name) : 'No name') + '</span>' +
+        '</div>';
+
+      const loccol = u.location
+        ? '<div class="loccol" title="' + esc(u.location) + '">' + esc(u.location) + '</div>'
+        : '<div class="loccol empty">unknown</div>';
+
+      const n = u.followers ?? 0;
+      const follcol = '<div class="follcol' + (n ? '' : ' zero') + '">' + n.toLocaleString() + '</div>';
+
       const srcBadge = u.email && u.email_source
-        ? `<span class="src ${esc(u.email_source)}" title="Email source: ${esc(u.email_source)}">${esc(u.email_source)}</span>`
+        ? '<span class="src ' + esc(u.email_source) + '" title="Email source: ' + esc(u.email_source) + '">' + esc(u.email_source) + '</span>'
         : '';
-      const emailRow = u.email
-        ? `<div class="email">
-             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="m2 6 10 7L22 6"/></svg>
-             <a href="mailto:${esc(u.email)}" title="Send email">${esc(u.email)}</a>
-             <button class="copy" type="button" data-email="${esc(u.email)}" title="Copy email" aria-label="Copy email">
-               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
-             </button>
-             ${srcBadge}
-           </div>`
-        : `<div class="email none">no email found</div>`;
+      const copyBtn =
+        '<button class="copy" type="button" data-email="' + esc(u.email || '') + '" title="Copy email" aria-label="Copy email">' +
+          '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>' +
+        '</button>';
+      const tgLink = u.telegram
+        ? '<a class="tg" href="' + esc(u.telegram) + '" target="_blank" rel="noopener" title="Telegram">' +
+            '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M22 3 2 11l6 2 2 6 3-4 5 4z"/></svg></a>'
+        : '';
+      const mailcol = hasEmail
+        ? '<div class="mailcol"><a class="addr" href="mailto:' + esc(u.email) + '" title="' + esc(u.email) + '">' + esc(u.email) + '</a>' + copyBtn + tgLink + srcBadge + '</div>'
+        : '<div class="mailcol none">no email' + tgLink + '</div>';
 
-      el.innerHTML = `
-        <img class="avatar" loading="lazy" src="${esc(u.avatar_url || '')}" alt="" />
-        <div class="info">
-          <div class="top">
-            <a class="login" href="${esc(u.html_url || '#')}" target="_blank" rel="noopener">@${esc(u.login)}</a>
-            ${pill}
-          </div>
-          <div class="name ${u.name ? '' : 'empty'}">${u.name ? esc(u.name) : 'No name'}</div>
-          <div class="chips">
-            ${loc}
-            <span class="chip foll">★ ${(u.followers ?? 0).toLocaleString()} followers</span>
-          </div>
-          ${emailRow}
-          <div class="links">${links.join('')}</div>
-        </div>`;
+      const statecol = '<div class="state">' + stateHtml(hasEmail, excluded, sentAt, reason) + '</div>';
+
+      el.innerHTML = avatar + idcol + loccol + follcol + mailcol + statecol + pick;
       return el;
     }
 
@@ -379,7 +570,7 @@
       statusEl.textContent = 'Loading…';
       grid.style.opacity = '.4';
       const params = new URLSearchParams({
-        page: state.page, pageSize: PAGE_SIZE, sort: state.sort,
+        page: state.page, pageSize: PAGE_SIZE, sort: state.sort, filter: state.filter,
       });
       if (state.q) params.set('q', state.q);
       try {
@@ -390,7 +581,13 @@
         openAllEl.disabled = data.users.length === 0;
         grid.innerHTML = '';
         data.users.forEach((u) => grid.appendChild(card(u)));
-        countEl.innerHTML = `<b>${data.total.toLocaleString()}</b> users`;
+        const FILTER_LABEL = {
+          all: 'users', sendable: 'queued to send', sent: 'already sent',
+          excluded: 'excluded', excluded_manual: 'excluded by you',
+          excluded_auto: 'excluded as non-UK', noemail: 'without email',
+        };
+        countEl.innerHTML = `<b>${data.total.toLocaleString()}</b> ${FILTER_LABEL[state.filter] || 'users'}`;
+        document.getElementById('listhead').style.display = data.users.length ? '' : 'none';
         statusEl.textContent = data.users.length ? '' : 'No users match your search.';
         renderPager(data.page, data.totalPages);
         pageInfoEl.textContent = data.total
@@ -408,6 +605,9 @@
       debounce = setTimeout(() => { state.q = searchEl.value.trim(); state.page = 1; load(); }, 300);
     });
     sortEl.addEventListener('change', () => { state.sort = sortEl.value; state.page = 1; load(); });
+    filterEl.addEventListener('change', () => {
+      state.filter = filterEl.value; state.page = 1; syncUrl(); load();
+    });
 
     // Copy an email to the clipboard (event-delegated — cards are re-rendered each page).
     async function copyText(text) {
@@ -436,6 +636,106 @@
       setTimeout(() => { btn.classList.remove('copied'); btn.innerHTML = original; }, 1200);
     });
 
+    // Repaint one row's badges after its tick changes, so the page needn't reload.
+    function refreshRowState(cardEl) {
+      const box = cardEl.querySelector('.pick input');
+      const stateEl = cardEl.querySelector('.state');
+      if (!box || !stateEl) return;
+      const hasEmail = !!box.dataset.email;
+      // A hand-toggled row is yours now: the server rewrites the reason to
+      // 'manual' on re-tick, so drop the auto styling to match.
+      if (!box.checked) { delete cardEl.dataset.reason; box.classList.remove('auto'); }
+      stateEl.innerHTML = stateHtml(hasEmail, box.checked, cardEl.dataset.sentAt || null, cardEl.dataset.reason || null);
+      cardEl.classList.toggle('is-excluded', box.checked && hasEmail);
+    }
+
+    // Tick = exclude. Writes straight to the suppression list the campaign
+    // already consults, so it takes effect on the next send with no restart.
+    // reason 'manual' keeps these distinct from the bulk 'non-uk' entries, so
+    // either group can be lifted later without disturbing the other.
+    async function setExcluded(email, exclude) {
+      const res = exclude
+        ? await fetch('/api/email/suppressions', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email: email, reason: 'manual' }),
+          })
+        : await fetch('/api/email/suppressions/' + encodeURIComponent(email), { method: 'DELETE' });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+    }
+
+    grid.addEventListener('change', async (e) => {
+      const box = e.target.closest('.pick input[type="checkbox"]');
+      if (!box) return;
+      const email = box.dataset.email;
+      if (!email) return;
+      const exclude = box.checked;
+      box.disabled = true;
+      try {
+        await setExcluded(email, exclude);
+        const cardEl = box.closest('.card');
+        if (cardEl) refreshRowState(cardEl);
+        statusEl.textContent = '';
+      } catch (err) {
+        // Revert, so a ticked box never claims a state the server rejected.
+        box.checked = !exclude;
+        statusEl.textContent = 'Could not update the exclusion (' + err.message + ').';
+      } finally {
+        box.disabled = false;
+      }
+    });
+
+    // Bulk exclude everyone listed on this page. The POST already accepts an
+    // array, so this is one request rather than one per user.
+    excludePageEl.addEventListener('click', async () => {
+      const emails = state.users.map((u) => u.email).filter(Boolean);
+      if (!emails.length) return;
+      if (!confirm('Exclude all ' + emails.length + ' user(s) on this page from the send list?')) return;
+      excludePageEl.disabled = true;
+      try {
+        const res = await fetch('/api/email/suppressions', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ emails: emails, reason: 'manual' }),
+        });
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        await load();
+      } catch (err) {
+        statusEl.textContent = 'Bulk exclude failed (' + err.message + ').';
+      } finally {
+        excludePageEl.disabled = false;
+      }
+    });
+
+    // --- Master send switch -------------------------------------------------
+    function paintSwitch(on) {
+      sendSwitchEl.checked = on;
+      sendLblEl.textContent = on ? 'Sending on' : 'Sending off';
+      sendLblEl.classList.toggle('off', !on);
+    }
+    async function loadSendState() {
+      try {
+        const s = await (await fetch('/api/email/state')).json();
+        // `running` is the live daemon; `desired` is what was last asked for and
+        // survives a restart. Show desired, since that is what takes effect.
+        paintSwitch((s.desired || 'off') === 'on');
+      } catch (err) { /* leave the switch as-is if the probe fails */ }
+    }
+    sendSwitchEl.addEventListener('change', async () => {
+      const want = sendSwitchEl.checked;
+      sendSwitchEl.disabled = true;
+      try {
+        const res = await fetch('/api/email/campaign/' + (want ? 'start' : 'stop'), { method: 'POST' });
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        paintSwitch(want);
+      } catch (err) {
+        paintSwitch(!want);
+        statusEl.textContent = 'Could not switch sending (' + err.message + ').';
+      } finally {
+        sendSwitchEl.disabled = false;
+      }
+    });
+
     // Open every user on the current page in a new tab, then advance a page.
     // Uses the recursive window.open() pattern (same approach as the GitHub bookmarklet).
     openAllEl.addEventListener('click', () => {
@@ -461,6 +761,7 @@
     });
 
     load();
+    loadSendState();
   </script>
 </body>
 </html>
