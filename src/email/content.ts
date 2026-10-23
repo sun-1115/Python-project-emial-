@@ -192,6 +192,15 @@ export function textToHtml(text: string): string {
   );
 }
 
+// Send text + HTML (multipart/alternative) on every path — campaign, warm-up and
+// test sends alike. Set EMAIL_HTML=false to go back to text-only.
+const SEND_HTML = process.env.EMAIL_HTML !== 'false';
+
+/** The `html` send option for a plain-text body ({} when HTML is disabled). */
+export function htmlOption(text: string): { html?: string } {
+  return SEND_HTML ? { html: textToHtml(text) } : {};
+}
+
 // --- Message templates (a folder of variants, one chosen at random per send) ---
 
 export interface Template {

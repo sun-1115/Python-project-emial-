@@ -14,7 +14,7 @@ import { loadConfig } from '../config.js';
 import { UserStore } from '../db.js';
 import { getAuthorizedClient, sendEmail, hasSendScope, MISSING_SCOPE_HINT } from './gmail.js';
 import { discoverAccounts, Account } from './accounts.js';
-import { buildBody, fillTemplate, pickTemplate, textToHtml, Recipient, Template } from './content.js';
+import { buildBody, fillTemplate, pickTemplate, htmlOption, Recipient, Template } from './content.js';
 import { isPersonalEmail } from '../github.js';
 import {
   inSendWindow,
@@ -42,10 +42,6 @@ const PERSONAL_ONLY = process.env.EMAIL_PERSONAL_ONLY !== 'false';
 // failing resolver would mark everything undeliverable). Opt in with
 // EMAIL_MX_CHECK=true only where MX lookups are known to work.
 const MX_CHECK = process.env.EMAIL_MX_CHECK === 'true';
-// Send text + HTML (multipart/alternative). Text-only messages are rendered by
-// Gmail in its plain-text style — a narrow fixed-width column with hard wraps
-// mid-sentence. Set EMAIL_HTML=false to go back to text-only.
-const SEND_HTML = process.env.EMAIL_HTML !== 'false';
 
 const mxCache = new Map<string, boolean>();
 /**
@@ -276,7 +272,7 @@ export async function runCampaign(store: UserStore, opts: CampaignOptions): Prom
       if (!s.auth) s.auth = getAuthorizedClient(s.acct.tokenPath);
       const { id, threadId } = await sendEmail(r.email, subject, body, {
         auth: s.auth,
-        ...(SEND_HTML ? { html: textToHtml(body) } : {}),
+        ...htmlOption(body),
       });
       store.recordSend({
         login: r.login, toEmail: r.email, subject, status: 'sent',

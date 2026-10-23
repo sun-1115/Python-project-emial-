@@ -24,7 +24,7 @@ import {
   CATCHUP_ENABLED,
 } from './email/pacing.js';
 import { runCampaign } from './email/campaign.js';
-import { loadTemplates, parseTemplate, type Template } from './email/content.js';
+import { htmlOption, loadTemplates, parseTemplate, type Template } from './email/content.js';
 import { runWarmupRound, warmupPeers, warmupAddresses } from './email/warmup.js';
 
 const config = loadConfig();
@@ -336,7 +336,7 @@ app.post('/api/email/accounts/:label/test', async (req, res) => {
     const body =
       `This is a test message confirming the "${label}" Gmail account can send.\n\n` +
       `Sent at ${new Date().toISOString()}.`;
-    const result = await sendEmail(to, subject, body, { auth });
+    const result = await sendEmail(to, subject, body, { auth, ...htmlOption(body) });
     await getTokenStatus(label, tokenPathFor(label), true); // a successful send proves the token is good
     res.json({ ok: true, to, messageId: result.id });
   } catch (err) {

@@ -12,7 +12,7 @@
 // a pairing explicitly. Anything left unpaired is logged, never dropped quietly.
 import { getAuthorizedClient, sendEmail } from './gmail.js';
 import { discoverAccounts } from './accounts.js';
-import { fillTemplate, spin, type Recipient, type Template } from './content.js';
+import { fillTemplate, htmlOption, spin, type Recipient, type Template } from './content.js';
 
 const stamp = () => new Date().toISOString().slice(11, 19);
 const log = (msg: string) => console.log(`[${stamp()}] [warmup] ${msg}`);
@@ -210,7 +210,7 @@ export async function runWarmupRound(
     const { subject, body, source } = pickMessage(i + off, to, opts);
     try {
       const auth = getAuthorizedClient(from.tokenPath);
-      await sendEmail(to.address, subject, body, { auth });
+      await sendEmail(to.address, subject, body, { auth, ...htmlOption(body) });
       sent++;
       log(`  ✓ ${from.address} → ${to.address} [${source}]`);
     } catch (err) {
