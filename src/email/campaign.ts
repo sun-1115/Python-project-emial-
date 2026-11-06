@@ -37,6 +37,9 @@ const log = (msg: string) => console.log(`[${stamp()}] ${msg}`);
 // almost never bounce; company/.edu/custom domains are where dead addresses
 // concentrate. On by default; set EMAIL_PERSONAL_ONLY=false to send to all.
 const PERSONAL_ONLY = process.env.EMAIL_PERSONAL_ONLY !== 'false';
+// Begin the queue at this user id. Lower ids are skipped, not suppressed, so
+// removing EMAIL_START_ID brings them back.
+const START_ID = Number(process.env.EMAIL_START_ID) || 0;
 // MX check: skip (and suppress) addresses whose domain provably can't receive
 // mail. OFF by default — it's redundant when PERSONAL_ONLY is on (personal
 // providers always have MX), and it's dangerous where DNS is unreliable (a
@@ -224,7 +227,7 @@ export async function runCampaign(store: UserStore, opts: CampaignOptions): Prom
   let queue: Recipient[] = [];
   let ptr = 0;
   const refill = (): boolean => {
-    let list = store.unsentRecipients() as Recipient[];
+    let list = store.unsentRecipients(undefined, START_ID) as Recipient[];
     // Personal-only: drop company/.edu/custom-domain addresses up front — these
     // are where "address not found" bounces concentrate. Skipped, not suppressed,
     // so flipping EMAIL_PERSONAL_ONLY back off restores them.
