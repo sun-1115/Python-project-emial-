@@ -17,6 +17,13 @@ export function replyText(plain: string): string {
     .join('\n');
 }
 
+/** Same as replyText for a reply that has only an HTML part. */
+export function htmlReplyText(html: string): string {
+  const quoteStart = html.search(/gmail_quote|<blockquote|yahoo_quoted|divRplyFwdMsg|<hr\b/i);
+  const own = quoteStart >= 0 ? html.slice(0, quoteStart) : html;
+  return replyText(own.replace(/<[^>]*>/g, ' '));
+}
+
 /** Did the person ask to stop, in the subject or in their own words? */
 export function isOptOut(subject: string, ownText: string): boolean {
   return OPT_OUT_RE.test(subject) || OPT_OUT_RE.test(ownText);
