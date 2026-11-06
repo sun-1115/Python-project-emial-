@@ -1,7 +1,8 @@
 # Email bot (Gmail API)
 
 Sends plain-text emails to the users stored in your SQLite DB, using the Gmail
-API with a **send-only** OAuth scope (`gmail.send`). Every send is logged to a
+API with the `gmail.send` and `gmail.readonly` OAuth scopes (the second only to
+detect blocked-message bounces). Every send is logged to a
 `sent_emails` table so runs are **idempotent** (no double-sends) and resumable.
 
 ## Files
@@ -18,7 +19,8 @@ API with a **send-only** OAuth scope (`gmail.send`). Every send is logged to a
 1. Go to <https://console.cloud.google.com/> → create (or pick) a project.
 2. **APIs & Services → Library →** search "Gmail API" → **Enable**.
 3. **APIs & Services → OAuth consent screen →** choose **External**, fill the app
-   name/email, and under **Scopes** add `.../auth/gmail.send`. Add your own Gmail
+   name/email, and under **Scopes** add `.../auth/gmail.send` and
+   `.../auth/gmail.readonly`. Add your own Gmail
    address under **Test users** (required while the app is in "Testing").
 4. **APIs & Services → Credentials → Create Credentials → OAuth client ID →**
    Application type **Desktop app** → **Create**.
