@@ -203,7 +203,7 @@
     <div class="sec-head">
       <h2>Accounts</h2>
       <div class="add-acct">
-        <input id="newAcct" class="acct-input" placeholder="new account label (e.g. alice)" />
+        <input id="newAcct" class="acct-input" placeholder="label or Gmail address (e.g. alice)" />
         <button id="addAcct" class="toggle">+ Add / authorize account</button>
       </div>
     </div>
@@ -516,7 +516,9 @@
     const newAcct = document.getElementById('newAcct');
     const addAcct = document.getElementById('addAcct');
     function submitNewAccount() {
-      const label = newAcct.value.trim();
+      // Accept a full Gmail address too: the label is the mailbox's local part,
+      // which is also what the identity check matches the token against.
+      const label = newAcct.value.trim().replace(/@.*$/, '');
       if (!label) { newAcct.focus(); return; }
       if (!/^[A-Za-z0-9._-]{1,64}$/.test(label)) {
         statusEl.textContent = 'Invalid label — use letters, digits, . _ - (max 64).';
