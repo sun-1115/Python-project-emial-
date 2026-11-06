@@ -455,6 +455,9 @@ export async function runCampaign(store: UserStore, opts: CampaignOptions): Prom
     ready.sort((a, b) => a.sentToday - b.sentToday || a.nextReadyAt - b.nextReadyAt);
     const s = ready[0];
 
+    // Before taking a recipient, so a pause doesn't use one up.
+    if (await pausedByBlock(s)) continue;
+
     const r = nextRecipient();
     if (!r) {
       log('No more recipients to send. Idling (crawler may add more)…');
