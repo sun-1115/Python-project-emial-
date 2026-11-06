@@ -14,6 +14,7 @@ import { loadConfig } from '../config.js';
 import { UserStore } from '../db.js';
 import { getAuthorizedClient, sendEmail, hasSendScope, hasReadScope, mailboxOf, MISSING_SCOPE_HINT } from './gmail.js';
 import { findBlockedBounce } from './bounces.js';
+import { findOptOuts } from './optouts.js';
 import { discoverAccounts, Account } from './accounts.js';
 import { buildBody, fillTemplate, pickTemplate, htmlOption, Recipient, Template } from './content.js';
 import { isPersonalEmail } from '../github.js';
@@ -376,6 +377,28 @@ export async function runCampaign(store: UserStore, opts: CampaignOptions): Prom
     } finally {
       const took = Date.now() - startedAt;
       if (took >= STALL_WARN_MS) log(`  ⚠ ${what} held up sending for ${Math.round(took / 1000)}s`);
+    }
+  };
+
+  /**
+   * Suppress everyone who replied asking to stop, across all accounts (paused ones
+   * included: a blocked account's recipients can still reply). Runs in the
+   * background so a slow inbox can't hold up sending, and logs a failed account
+   * rather than stopping: the next scan looks back far enough to catch up.
+   */
+  const scanOptOuts = async (): Promise<void> => {
+    for (const s of states) {
+      const label = s.acct.label;
+      if (hasReadScope(s.acct.tokenPath) === false) continue;
+      try {
+        if (!s.auth) s.auth = getAuthorizedClient(s.acct.tokenPath);
+        const found = await findOptOuts(s.auth, (address) => store.wasSent(address));
+        const fresh = found.filter((address) => !store.isSuppressed(address));
+        store.addSuppressions(fresh, 'unsubscribe');
+        for (const address of fresh) log(`  ⤫ [${label}] ${address} asked to unsubscribe — suppressed`);
+      } catch (err) {
+        log(`  ⚠ [${label}] can't check for opt-out replies: ${err instanceof Error ? err.message : String(err)}`);
+      }
     }
   };
 
