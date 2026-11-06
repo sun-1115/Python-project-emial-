@@ -548,14 +548,16 @@ export class UserStore {
 
   /**
    * Recipients for the email bot: users that have an email and have NOT already
-   * been sent to successfully. Ordered by id so runs are resumable/stable.
+   * been sent to successfully. Ordered by id so runs are resumable/stable. Users
+   * below `startId` are left out of this list, not suppressed.
    */
-  unsentRecipients(limit?: number): { login: string; email: string; name: string | null }[] {
+  unsentRecipients(limit?: number, startId = 0): { login: string; email: string; name: string | null }[] {
     const cap = Math.max(limit ?? 0, 0);
     const sql = `
       SELECT u.login, u.email, u.name
       FROM users u
       WHERE u.email IS NOT NULL AND u.email <> ''
+        AND u.id >= :startId
         AND NOT EXISTS (
           SELECT 1 FROM sent_emails s
           WHERE s.status = 'sent' AND lower(s.to_email) = lower(u.email)
@@ -565,7 +567,9 @@ export class UserStore {
         )
       ORDER BY u.id
       ${cap > 0 ? 'LIMIT :limit' : ''}`;
-    const rows = cap > 0 ? this.db.prepare(sql).all({ limit: cap }) : this.db.prepare(sql).all();
+    const rows = cap > 0
+      ? this.db.prepare(sql).all({ startId, limit: cap })
+      : this.db.prepare(sql).all({ startId });
     return rows as unknown as { login: string; email: string; name: string | null }[];
   }
 
