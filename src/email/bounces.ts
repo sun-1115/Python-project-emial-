@@ -12,3 +12,20 @@ export function isBlockedBounce(text: string): boolean {
   return BLOCKED_RE.test(text);
 }
 
+/** Minimal shape of a Gmail message part (recursive for multipart bounces). */
+interface MessagePart {
+  mimeType?: string | null;
+  body?: { data?: string | null } | null;
+  parts?: MessagePart[] | null;
+}
+
+/** Decoded text/* content of a message, across all nested MIME parts. */
+export function messageText(part: MessagePart | null | undefined): string {
+  if (!part) return '';
+  const own =
+    part.mimeType?.startsWith('text/') && part.body?.data
+      ? Buffer.from(part.body.data, 'base64url').toString('utf8')
+      : '';
+  return [own, ...(part.parts ?? []).map(messageText)].join('\n');
+}
+
