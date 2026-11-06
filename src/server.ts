@@ -11,6 +11,7 @@ import {
   tokenPathFor,
   getAuthorizedClient,
   sendEmail,
+  hasReadScope,
 } from './email/gmail.js';
 import {
   inSendWindow,
@@ -223,6 +224,8 @@ app.get('/api/email/overview', async (_req, res) => {
         label: a.label,
         ageDays,
         paused,
+        blocked: store.accountBlock(a.label),
+        canDetectBlocks: hasReadScope(a.tokenPath) !== false,
         cap,
         sentToday,
         remaining: Math.max(cap - sentToday, 0),
