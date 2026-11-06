@@ -647,6 +647,13 @@ export class UserStore {
       .run(paused ? 1 : 0, account);
   }
 
+  /** Pause an account until `until` (epoch ms) because Gmail blocked its mail. */
+  blockAccount(account: string, until: number, reason: string): void {
+    this.db
+      .prepare('UPDATE email_accounts SET blocked_until = ?, blocked_reason = ? WHERE account = ?')
+      .run(until, reason, account);
+  }
+
   /** Successful sends by this account on the given calendar day (UK date key). */
   sentCountOnDay(account: string, day: string): number {
     const row = this.db
