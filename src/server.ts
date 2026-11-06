@@ -111,6 +111,7 @@ async function warmupTick(): Promise<void> {
     const res = await runWarmupRound(offset, {
       templates: campaignTemplates(),
       defaultSubject: DEFAULT_SUBJECT,
+      isPaused: (label) => store.isAccountPaused(label),
     });
     if (res.total > 0) {
       // Mark done for today (even if some sends failed) so it doesn't churn, and
