@@ -634,11 +634,12 @@ export class UserStore {
     return Math.max(row?.days ?? 0, 0);
   }
 
+  /** Paused by the operator, or inside an automatic block pause. */
   isAccountPaused(account: string): boolean {
     const row = this.db
-      .prepare('SELECT paused FROM email_accounts WHERE account = ?')
-      .get(account) as { paused: number } | undefined;
-    return (row?.paused ?? 0) === 1;
+      .prepare('SELECT paused, blocked_until FROM email_accounts WHERE account = ?')
+      .get(account) as { paused: number; blocked_until: number | null } | undefined;
+    return (row?.paused ?? 0) === 1 || (row?.blocked_until ?? 0) > Date.now();
   }
 
   setAccountPaused(account: string, paused: boolean): void {
