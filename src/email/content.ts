@@ -165,9 +165,9 @@ export function buildBody(
 // Sent as text/plain only, Gmail renders the message in its plain-text style: a
 // narrow fixed-width column with hard wraps mid-sentence. Pairing the same text
 // with a text/html part makes it render like a normal email — proper paragraphs
-// that reflow to the reader's window. The markup is deliberately minimal
-// (paragraphs + one inline font rule); image-heavy or table-based HTML is a
-// spam signal, and clients that prefer plain text still get the text part.
+// that reflow to the reader's window. The markup is deliberately bare (paragraphs,
+// no styling), so the message shows in the reader's default font and size;
+// clients that prefer plain text still get the text part.
 
 const HTML_ESCAPES: Record<string, string> = {
   '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
@@ -182,14 +182,9 @@ export function textToHtml(text: string): string {
     .split(/\n{2,}/)
     .map((block) => block.trim())
     .filter(Boolean)
-    .map((block) => `  <p style="margin:0 0 14px;">${escapeHtml(block).split('\n').join('<br>')}</p>`)
+    .map((block) => `<p>${escapeHtml(block).split('\n').join('<br>')}</p>`)
     .join('\n');
-  return (
-    '<div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;' +
-    'line-height:1.6;color:#202124;">\n' +
-    paragraphs +
-    '\n</div>'
-  );
+  return `<div>\n${paragraphs}\n</div>`;
 }
 
 // Send text + HTML (multipart/alternative) on every path — campaign, warm-up and
