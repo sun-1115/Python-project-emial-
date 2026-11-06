@@ -1,4 +1,4 @@
-// Gmail sender — OAuth 2.0 (send-only scope) with token persistence & auto-refresh,
+// Gmail sender — OAuth 2.0 with token persistence & auto-refresh,
 // MIME construction (text/plain + optional text/html, Cc/Bcc, attachments), and
 // users.messages.send with exponential backoff on 429 / 5xx.
 //
@@ -12,7 +12,9 @@ import { google } from 'googleapis';
 // google-auth-library can resolve to a duplicate copy and clash with googleapis.
 type OAuth2Client = InstanceType<typeof google.auth.OAuth2>;
 
-// Send-only, plus identity. `openid`/`userinfo.email` grant NO mailbox access —
+// Send, read, plus identity. gmail.readonly is what lets the campaign see
+// "Message blocked" bounces, which only ever arrive in the inbox (see bounces.ts).
+// `openid`/`userinfo.email` grant NO mailbox access —
 // they only reveal WHICH account consented, which is what lets us prove that
 // token-<label>.json really belongs to <label>@gmail.com. Without them the label
 // is just a filename someone typed at auth time, and a token authorized while
@@ -20,6 +22,7 @@ type OAuth2Client = InstanceType<typeof google.auth.OAuth2>;
 // then reports sends under a name that never sent them.
 export const SCOPES = [
   'https://www.googleapis.com/auth/gmail.send',
+  'https://www.googleapis.com/auth/gmail.readonly',
   'openid',
   'https://www.googleapis.com/auth/userinfo.email',
 ];
@@ -28,6 +31,10 @@ const CREDENTIALS_PATH = process.env.GMAIL_CREDENTIALS_PATH?.trim() || './creden
 const TOKEN_PATH = process.env.GMAIL_TOKEN_PATH?.trim() || './token.json';
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+// Every Google call made through a client, token refreshes included. There is no
+// timeout by default, so one hung request would hold up the campaign's send loop.
+const REQUEST_TIMEOUT_MS = 30_000;
 
 interface ClientSecret {
   client_id: string;
@@ -59,7 +66,12 @@ function loadClientSecret(): ClientSecret {
 
 function makeOAuthClient(redirectUri: string): OAuth2Client {
   const { client_id, client_secret } = loadClientSecret();
-  return new google.auth.OAuth2(client_id, client_secret, redirectUri);
+  return new google.auth.OAuth2({
+    clientId: client_id,
+    clientSecret: client_secret,
+    redirectUri,
+    transporterOptions: { timeout: REQUEST_TIMEOUT_MS },
+  });
 }
 
 /**
@@ -217,6 +229,7 @@ export async function exchangeCodeAndSave(
 }
 
 const SEND_SCOPE = 'https://www.googleapis.com/auth/gmail.send';
+const READ_SCOPE = 'https://www.googleapis.com/auth/gmail.readonly';
 
 /** Human-readable reminder for the one consent-screen mistake that causes this. */
 export const MISSING_SCOPE_HINT =
@@ -233,11 +246,20 @@ export const MISSING_SCOPE_HINT =
  * so an old-but-working token is never retired on a guess.
  */
 export function hasSendScope(tokenPath: string): boolean | null {
+  return tokenHasScope(tokenPath, SEND_SCOPE);
+}
+
+/** Can this token read the inbox, and so see block bounces? Same null rule. */
+export function hasReadScope(tokenPath: string): boolean | null {
+  return tokenHasScope(tokenPath, READ_SCOPE);
+}
+
+function tokenHasScope(tokenPath: string, scope: string): boolean | null {
   if (!existsSync(tokenPath)) return null;
   try {
     const token = JSON.parse(readFileSync(tokenPath, 'utf8'));
     if (typeof token.scope !== 'string' || !token.scope.trim()) return null;
-    return token.scope.split(/\s+/).includes(SEND_SCOPE);
+    return token.scope.split(/\s+/).includes(scope);
   } catch {
     return null;
   }
@@ -336,6 +358,7 @@ export interface SendEmailOptions {
   cc?: string | string[];
   bcc?: string | string[];
   html?: string; // if set, message is sent as multipart/alternative (text + html)
+  listUnsubscribe?: string; // List-Unsubscribe header value, e.g. <mailto:me@x.com?subject=unsubscribe>
   attachments?: Attachment[];
   auth?: OAuth2Client; // reuse one client across many sends (campaign)
 }
@@ -382,6 +405,7 @@ export function buildRawMessage(
   if (opts.cc) headers.push(`Cc: ${asList(opts.cc)}`);
   if (opts.bcc) headers.push(`Bcc: ${asList(opts.bcc)}`);
   headers.push(`Subject: ${encodeHeader(subject)}`);
+  if (opts.listUnsubscribe) headers.push(`List-Unsubscribe: ${opts.listUnsubscribe}`);
   headers.push('MIME-Version: 1.0');
 
   const parts: string[] = [];

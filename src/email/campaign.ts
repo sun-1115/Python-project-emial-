@@ -12,9 +12,11 @@ import { resolveMx } from 'node:dns/promises';
 import { statSync } from 'node:fs';
 import { loadConfig } from '../config.js';
 import { UserStore } from '../db.js';
-import { getAuthorizedClient, sendEmail, hasSendScope, MISSING_SCOPE_HINT } from './gmail.js';
+import { getAuthorizedClient, sendEmail, hasSendScope, hasReadScope, mailboxOf, MISSING_SCOPE_HINT } from './gmail.js';
+import { findBlockedBounce } from './bounces.js';
+import { findOptOuts } from './optouts.js';
 import { discoverAccounts, Account } from './accounts.js';
-import { buildBody, fillTemplate, pickTemplate, textToHtml, Recipient, Template } from './content.js';
+import { buildBody, fillTemplate, pickTemplate, htmlOption, Recipient, Template } from './content.js';
 import { isPersonalEmail } from '../github.js';
 import {
   inSendWindow,
@@ -36,16 +38,15 @@ const log = (msg: string) => console.log(`[${stamp()}] ${msg}`);
 // almost never bounce; company/.edu/custom domains are where dead addresses
 // concentrate. On by default; set EMAIL_PERSONAL_ONLY=false to send to all.
 const PERSONAL_ONLY = process.env.EMAIL_PERSONAL_ONLY !== 'false';
+// Begin the queue at this user id. Lower ids are skipped, not suppressed, so
+// removing EMAIL_START_ID brings them back.
+const START_ID = Number(process.env.EMAIL_START_ID) || 0;
 // MX check: skip (and suppress) addresses whose domain provably can't receive
 // mail. OFF by default — it's redundant when PERSONAL_ONLY is on (personal
 // providers always have MX), and it's dangerous where DNS is unreliable (a
 // failing resolver would mark everything undeliverable). Opt in with
 // EMAIL_MX_CHECK=true only where MX lookups are known to work.
 const MX_CHECK = process.env.EMAIL_MX_CHECK === 'true';
-// Send text + HTML (multipart/alternative). Text-only messages are rendered by
-// Gmail in its plain-text style — a narrow fixed-width column with hard wraps
-// mid-sentence. Set EMAIL_HTML=false to go back to text-only.
-const SEND_HTML = process.env.EMAIL_HTML !== 'false';
 
 const mxCache = new Map<string, boolean>();
 /**
@@ -145,7 +146,7 @@ export async function runCampaign(store: UserStore, opts: CampaignOptions): Prom
           tokenStamp: tokenStamp(acct.tokenPath),
           cap: 0,
           sentToday: store.sentCountOnDay(acct.label, day),
-          nextReadyAt: 0,
+          nextReadyAt: Date.now() + nextGapMs(), // staggered, so a restart isn't a burst from every account
           disabled: false,
           scopeBlocked: false,
           paused: false,
@@ -227,7 +228,7 @@ export async function runCampaign(store: UserStore, opts: CampaignOptions): Prom
   let queue: Recipient[] = [];
   let ptr = 0;
   const refill = (): boolean => {
-    let list = store.unsentRecipients() as Recipient[];
+    let list = store.unsentRecipients(undefined, START_ID) as Recipient[];
     // Personal-only: drop company/.edu/custom-domain addresses up front — these
     // are where "address not found" bounces concentrate. Skipped, not suppressed,
     // so flipping EMAIL_PERSONAL_ONLY back off restores them.
@@ -274,9 +275,11 @@ export async function runCampaign(store: UserStore, opts: CampaignOptions): Prom
       // Inside the try: a malformed/unreadable token file throws here, and that
       // must retire one account — not tear down the whole daemon.
       if (!s.auth) s.auth = getAuthorizedClient(s.acct.tokenPath);
+      const mailbox = mailboxOf(s.acct.tokenPath);
       const { id, threadId } = await sendEmail(r.email, subject, body, {
         auth: s.auth,
-        ...(SEND_HTML ? { html: textToHtml(body) } : {}),
+        ...htmlOption(body),
+        ...(mailbox ? { listUnsubscribe: `<mailto:${mailbox}?subject=unsubscribe>` } : {}),
       });
       store.recordSend({
         login: r.login, toEmail: r.email, subject, status: 'sent',
@@ -319,6 +322,86 @@ export async function runCampaign(store: UserStore, opts: CampaignOptions): Prom
     }
   };
 
+  /** How long one address rests after Gmail blocks a message it sent. */
+  const BLOCK_PAUSE_MS = 24 * 60 * 60_000;
+  /** How soon to retry an account whose inbox couldn't be read. */
+  const BLOCK_RETRY_MS = 2 * 60_000;
+  const blockCheckWarned = new Set<string>(); // log an unreadable inbox once, not per send
+
+  /**
+   * Has Gmail bounced one of this account's messages as blocked? If so, pause only
+   * this address for a day from the block. Returns true when it must not send now.
+   * Runs before each send and on a periodic sweep, because a bounce can land 30+
+   * minutes after the message that caused it. A failed read holds the account and
+   * retries shortly, since sending blind could ignore a block. A token without
+   * gmail.readonly can never be checked, so it keeps sending (the dashboard says so).
+   */
+  const pausedByBlock = async (s: AccountState): Promise<boolean> => {
+    const label = s.acct.label;
+    const warnOnce = (msg: string) => {
+      if (!blockCheckWarned.has(label)) log(`  ⚠ [${label}] can't check for blocked mail: ${msg}`);
+      blockCheckWarned.add(label);
+    };
+    if (hasReadScope(s.acct.tokenPath) === false) {
+      warnOnce('token lacks gmail.readonly — re-authorize this account');
+      return false;
+    }
+    try {
+      if (!s.auth) s.auth = getAuthorizedClient(s.acct.tokenPath);
+      // A block older than the pause length has nothing left to pause.
+      const since = Math.max(store.blockCheckedAt(label), Date.now() - BLOCK_PAUSE_MS);
+      const block = await findBlockedBounce(s.auth, since);
+      blockCheckWarned.delete(label);
+      if (!block) return false;
+      store.setBlockCheckedAt(label, block.at);
+      const until = block.at + BLOCK_PAUSE_MS;
+      const to = block.recipient ?? 'unknown recipient';
+      store.blockAccount(label, until, `Gmail blocked a message to ${to}`);
+      s.paused = true;
+      s.cap = 0; // takes effect now; the sweep runs before the eligibility check
+      log(`  ⏸ [${label}] Gmail blocked a message to ${to} — paused until ${new Date(until).toISOString()}`);
+      return true;
+    } catch (err) {
+      warnOnce(err instanceof Error ? err.message : String(err));
+      s.nextReadyAt = Math.max(s.nextReadyAt, Date.now() + BLOCK_RETRY_MS);
+      return true;
+    }
+  };
+
+  /** Report any step slow enough to have held up the whole send loop. */
+  const STALL_WARN_MS = 60_000;
+  const timed = async <T>(what: string, step: () => Promise<T>): Promise<T> => {
+    const startedAt = Date.now();
+    try {
+      return await step();
+    } finally {
+      const took = Date.now() - startedAt;
+      if (took >= STALL_WARN_MS) log(`  ⚠ ${what} held up sending for ${Math.round(took / 1000)}s`);
+    }
+  };
+
+  /**
+   * Suppress everyone who replied asking to stop, across all accounts (paused ones
+   * included: a blocked account's recipients can still reply). Runs in the
+   * background so a slow inbox can't hold up sending, and logs a failed account
+   * rather than stopping: the next scan looks back far enough to catch up.
+   */
+  const scanOptOuts = async (): Promise<void> => {
+    for (const s of states) {
+      const label = s.acct.label;
+      if (hasReadScope(s.acct.tokenPath) === false) continue;
+      try {
+        if (!s.auth) s.auth = getAuthorizedClient(s.acct.tokenPath);
+        const found = await findOptOuts(s.auth, (address) => store.wasSent(address));
+        const fresh = found.filter((address) => !store.isSuppressed(address));
+        store.addSuppressions(fresh, 'unsubscribe');
+        for (const address of fresh) log(`  ⤫ [${label}] ${address} asked to unsubscribe — suppressed`);
+      } catch (err) {
+        log(`  ⚠ [${label}] can't check for opt-out replies: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+  };
+
   let totalSent = 0;
   const limitReached = () => opts.totalLimit != null && opts.totalLimit > 0 && totalSent >= opts.totalLimit;
 
@@ -340,6 +423,7 @@ export async function runCampaign(store: UserStore, opts: CampaignOptions): Prom
     for (const s of states) {
       if (limitReached()) break;
       if (s.disabled || s.sentToday >= s.cap) continue;
+      if (await pausedByBlock(s)) continue;
       const r = nextRecipient();
       if (!r) break;
       if (!(await deliverable(r))) continue;
@@ -360,6 +444,14 @@ export async function runCampaign(store: UserStore, opts: CampaignOptions): Prom
     }
   };
 
+  // Look for blocks across every account, not only the one about to send, so a
+  // pause lands (and shows on the dashboard) without waiting for that account's turn.
+  const BLOCK_SWEEP_MS = 5 * 60_000;
+  let nextBlockSweep = 0;
+  const OPT_OUT_SCAN_MS = 60 * 60_000;
+  let nextOptOutScan = 0;
+  let optOutScanRunning = false;
+
   log('Daemon started.');
   for (;;) {
     if (stopped()) {
@@ -376,6 +468,24 @@ export async function runCampaign(store: UserStore, opts: CampaignOptions): Prom
     // change additionally rolls the per-day counters.
     if (today !== currentDay) refreshDay(today);
     else syncAccounts(today);
+
+    if (Date.now() >= nextOptOutScan && !optOutScanRunning) {
+      nextOptOutScan = Date.now() + OPT_OUT_SCAN_MS;
+      optOutScanRunning = true;
+      void scanOptOuts().finally(() => {
+        optOutScanRunning = false;
+      });
+    }
+
+    if (Date.now() >= nextBlockSweep) {
+      nextBlockSweep = Date.now() + BLOCK_SWEEP_MS;
+      await timed('Block sweep', async () => {
+        for (const s of states) {
+          if (stopped()) break;
+          if (!s.paused && !s.disabled) await pausedByBlock(s);
+        }
+      });
+    }
 
     // Send during business hours, and — if a catch-up extension is configured —
     // keep going past the window until each account reaches its daily cap.
@@ -411,6 +521,9 @@ export async function runCampaign(store: UserStore, opts: CampaignOptions): Prom
     ready.sort((a, b) => a.sentToday - b.sentToday || a.nextReadyAt - b.nextReadyAt);
     const s = ready[0];
 
+    // Before taking a recipient, so a pause doesn't use one up.
+    if (await timed(`[${s.acct.label}] block check`, () => pausedByBlock(s))) continue;
+
     const r = nextRecipient();
     if (!r) {
       log('No more recipients to send. Idling (crawler may add more)…');
@@ -419,7 +532,7 @@ export async function runCampaign(store: UserStore, opts: CampaignOptions): Prom
     }
 
     if (!(await deliverable(r))) continue; // bad domain — suppressed, try another
-    if (await sendOne(s, r)) totalSent++;
+    if (await timed(`[${s.acct.label}] send`, () => sendOne(s, r))) totalSent++;
     s.nextReadyAt = Date.now() + nextGapMs(); // human-like gap before this account sends again
   }
 }

@@ -251,6 +251,18 @@ export class UserStore {
       }
     }
 
+    // email_accounts gained an automatic, self-expiring pause for blocked mail.
+    const acctCols = this.db.prepare('PRAGMA table_info(email_accounts)').all() as { name: string }[];
+    if (!acctCols.some((c) => c.name === 'blocked_until')) {
+      this.db.exec('ALTER TABLE email_accounts ADD COLUMN blocked_until INTEGER'); // epoch ms
+    }
+    if (!acctCols.some((c) => c.name === 'blocked_reason')) {
+      this.db.exec('ALTER TABLE email_accounts ADD COLUMN blocked_reason TEXT');
+    }
+    if (!acctCols.some((c) => c.name === 'block_checked_at')) {
+      this.db.exec('ALTER TABLE email_accounts ADD COLUMN block_checked_at INTEGER'); // newest block acted on
+    }
+
 
     this.migrateToSurrogateId();
   }
@@ -536,14 +548,16 @@ export class UserStore {
 
   /**
    * Recipients for the email bot: users that have an email and have NOT already
-   * been sent to successfully. Ordered by id so runs are resumable/stable.
+   * been sent to successfully. Ordered by id so runs are resumable/stable. Users
+   * below `startId` are left out of this list, not suppressed.
    */
-  unsentRecipients(limit?: number): { login: string; email: string; name: string | null }[] {
+  unsentRecipients(limit?: number, startId = 0): { login: string; email: string; name: string | null }[] {
     const cap = Math.max(limit ?? 0, 0);
     const sql = `
       SELECT u.login, u.email, u.name
       FROM users u
       WHERE u.email IS NOT NULL AND u.email <> ''
+        AND u.id >= :startId
         AND NOT EXISTS (
           SELECT 1 FROM sent_emails s
           WHERE s.status = 'sent' AND lower(s.to_email) = lower(u.email)
@@ -553,7 +567,9 @@ export class UserStore {
         )
       ORDER BY u.id
       ${cap > 0 ? 'LIMIT :limit' : ''}`;
-    const rows = cap > 0 ? this.db.prepare(sql).all({ limit: cap }) : this.db.prepare(sql).all();
+    const rows = cap > 0
+      ? this.db.prepare(sql).all({ startId, limit: cap })
+      : this.db.prepare(sql).all({ startId });
     return rows as unknown as { login: string; email: string; name: string | null }[];
   }
 
@@ -622,17 +638,49 @@ export class UserStore {
     return Math.max(row?.days ?? 0, 0);
   }
 
+  /** Paused by the operator, or inside an automatic block pause. */
   isAccountPaused(account: string): boolean {
     const row = this.db
-      .prepare('SELECT paused FROM email_accounts WHERE account = ?')
-      .get(account) as { paused: number } | undefined;
-    return (row?.paused ?? 0) === 1;
+      .prepare('SELECT paused, blocked_until FROM email_accounts WHERE account = ?')
+      .get(account) as { paused: number; blocked_until: number | null } | undefined;
+    return (row?.paused ?? 0) === 1 || (row?.blocked_until ?? 0) > Date.now();
   }
 
+  /** Setting paused either way also clears a block pause: resume means resume. */
   setAccountPaused(account: string, paused: boolean): void {
     this.db
-      .prepare('UPDATE email_accounts SET paused = ? WHERE account = ?')
+      .prepare('UPDATE email_accounts SET paused = ?, blocked_until = NULL, blocked_reason = NULL WHERE account = ?')
       .run(paused ? 1 : 0, account);
+  }
+
+  /** Pause an account until `until` (epoch ms) because Gmail blocked its mail. */
+  blockAccount(account: string, until: number, reason: string): void {
+    this.db
+      .prepare('UPDATE email_accounts SET blocked_until = ?, blocked_reason = ? WHERE account = ?')
+      .run(until, reason, account);
+  }
+
+  /** The account's block pause, if one is in force right now. */
+  accountBlock(account: string): { until: number; reason: string | null } | null {
+    const row = this.db
+      .prepare('SELECT blocked_until, blocked_reason FROM email_accounts WHERE account = ?')
+      .get(account) as { blocked_until: number | null; blocked_reason: string | null } | undefined;
+    if (!row?.blocked_until || row.blocked_until <= Date.now()) return null;
+    return { until: row.blocked_until, reason: row.blocked_reason };
+  }
+
+  /** Timestamp of the newest block already acted on for this account (0 = none). */
+  blockCheckedAt(account: string): number {
+    const row = this.db
+      .prepare('SELECT block_checked_at FROM email_accounts WHERE account = ?')
+      .get(account) as { block_checked_at: number | null } | undefined;
+    return row?.block_checked_at ?? 0;
+  }
+
+  setBlockCheckedAt(account: string, at: number): void {
+    this.db
+      .prepare('UPDATE email_accounts SET block_checked_at = ? WHERE account = ?')
+      .run(at, account);
   }
 
   /** Successful sends by this account on the given calendar day (UK date key). */

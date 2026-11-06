@@ -11,6 +11,7 @@ import {
   tokenPathFor,
   getAuthorizedClient,
   sendEmail,
+  hasReadScope,
 } from './email/gmail.js';
 import {
   inSendWindow,
@@ -24,7 +25,7 @@ import {
   CATCHUP_ENABLED,
 } from './email/pacing.js';
 import { runCampaign } from './email/campaign.js';
-import { loadTemplates, parseTemplate, type Template } from './email/content.js';
+import { htmlOption, loadTemplates, parseTemplate, type Template } from './email/content.js';
 import { runWarmupRound, warmupPeers, warmupAddresses } from './email/warmup.js';
 
 const config = loadConfig();
@@ -111,6 +112,7 @@ async function warmupTick(): Promise<void> {
     const res = await runWarmupRound(offset, {
       templates: campaignTemplates(),
       defaultSubject: DEFAULT_SUBJECT,
+      isPaused: (label) => store.isAccountPaused(label),
     });
     if (res.total > 0) {
       // Mark done for today (even if some sends failed) so it doesn't churn, and
@@ -222,6 +224,8 @@ app.get('/api/email/overview', async (_req, res) => {
         label: a.label,
         ageDays,
         paused,
+        blocked: store.accountBlock(a.label),
+        canDetectBlocks: hasReadScope(a.tokenPath) !== false,
         cap,
         sentToday,
         remaining: Math.max(cap - sentToday, 0),
@@ -336,7 +340,7 @@ app.post('/api/email/accounts/:label/test', async (req, res) => {
     const body =
       `This is a test message confirming the "${label}" Gmail account can send.\n\n` +
       `Sent at ${new Date().toISOString()}.`;
-    const result = await sendEmail(to, subject, body, { auth });
+    const result = await sendEmail(to, subject, body, { auth, ...htmlOption(body) });
     await getTokenStatus(label, tokenPathFor(label), true); // a successful send proves the token is good
     res.json({ ok: true, to, messageId: result.id });
   } catch (err) {

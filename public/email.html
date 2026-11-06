@@ -203,7 +203,7 @@
     <div class="sec-head">
       <h2>Accounts</h2>
       <div class="add-acct">
-        <input id="newAcct" class="acct-input" placeholder="new account label (e.g. alice)" />
+        <input id="newAcct" class="acct-input" placeholder="label or Gmail address (e.g. alice)" />
         <button id="addAcct" class="toggle">+ Add / authorize account</button>
       </div>
     </div>
@@ -221,7 +221,7 @@
         <textarea id="suppInput" placeholder="Paste addresses to suppress (one per line, or comma-separated)…"></textarea>
         <button id="suppAdd" class="btn">Add</button>
       </div>
-      <div class="hint">Suppressed addresses are never emailed. Add anyone who replies “unsubscribe”, plus hard bounces.</div>
+      <div class="hint">Suppressed addresses are never emailed. Replies asking to unsubscribe are added automatically every hour; add hard bounces here.</div>
       <ul class="supp-list" id="suppList"></ul>
     </div>
 
@@ -317,9 +317,12 @@
       accountsEl.innerHTML = accounts.map((a) => {
         const pct = a.cap > 0 ? Math.min(100, Math.round((a.sentToday / a.cap) * 100)) : 0;
         const full = a.cap > 0 && a.sentToday >= a.cap;
-        const status = a.paused
-          ? '<span class="badge paused">paused</span>'
-          : '<span class="badge active">active</span>';
+        const status = a.blocked
+          ? `<span class="badge paused" title="${esc(a.blocked.reason || 'Gmail blocked a message')}">blocked until ${esc(new Date(a.blocked.until).toLocaleString())}</span>`
+          : a.paused
+            ? '<span class="badge paused">paused</span>'
+            : '<span class="badge active">active</span>';
+        const noBlockCheck = a.canDetectBlocks ? '' : ' · re-auth to detect blocks';
         const tok = a.token || {};
         const tokBadge = tok.ok
           ? '<span class="badge tok-ok">valid</span>'
@@ -327,7 +330,7 @@
         const reauth = `<button class="toggle reauth" data-auth="${esc(a.label)}">${tok.ok ? 'Re-auth' : 'Authorize'}</button>`;
         const test = `<button class="toggle" data-test="${esc(a.label)}"${tok.ok ? '' : ' disabled title="Authorize this account first"'}>Test</button>`;
         return `<tr>
-          <td><div class="acct">${esc(a.label)}</div><div class="age">day ${a.ageDays} · cap ${a.cap}/day</div></td>
+          <td><div class="acct">${esc(a.label)}</div><div class="age">day ${a.ageDays} · cap ${a.cap}/day${noBlockCheck}</div></td>
           <td><div class="prog">
             <div class="track"><div class="fill ${full ? 'full' : ''}" style="width:${pct}%"></div></div>
             <span class="num">${a.sentToday}/${a.cap}</span>
@@ -513,7 +516,9 @@
     const newAcct = document.getElementById('newAcct');
     const addAcct = document.getElementById('addAcct');
     function submitNewAccount() {
-      const label = newAcct.value.trim();
+      // Accept a full Gmail address too: the label is the mailbox's local part,
+      // which is also what the identity check matches the token against.
+      const label = newAcct.value.trim().replace(/@.*$/, '');
       if (!label) { newAcct.focus(); return; }
       if (!/^[A-Za-z0-9._-]{1,64}$/.test(label)) {
         statusEl.textContent = 'Invalid label — use letters, digits, . _ - (max 64).';
