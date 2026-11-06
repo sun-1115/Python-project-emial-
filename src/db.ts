@@ -654,6 +654,15 @@ export class UserStore {
       .run(until, reason, account);
   }
 
+  /** The account's block pause, if one is in force right now. */
+  accountBlock(account: string): { until: number; reason: string | null } | null {
+    const row = this.db
+      .prepare('SELECT blocked_until, blocked_reason FROM email_accounts WHERE account = ?')
+      .get(account) as { blocked_until: number | null; blocked_reason: string | null } | undefined;
+    if (!row?.blocked_until || row.blocked_until <= Date.now()) return null;
+    return { until: row.blocked_until, reason: row.blocked_reason };
+  }
+
   /** Successful sends by this account on the given calendar day (UK date key). */
   sentCountOnDay(account: string, day: string): number {
     const row = this.db
