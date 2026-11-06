@@ -109,8 +109,18 @@ All knobs live in `.env` (see `.env.example`): timezone, window hours/days,
   (`/email.html`): paste any address that replies "unsubscribe" (plus hard
   bounces) and the campaign will never send to it again. Send-only scope can't
   read replies, so scan each inbox and add opt-outs there.
-- **You are blind to bounces/complaints** with send-only scope + consumer Gmail.
-  Watch for accounts that suddenly throw send errors — the bot auto-pauses an
-  account for the day when Gmail signals a sending limit.
+- **Blocked mail pauses that address for 24 hours.** When Gmail bounces a message
+  as "Message blocked", the address that sent it stops sending (campaign and
+  warm-up) for a day from the bounce, then resumes by itself; other addresses carry
+  on. Every account is checked every 5 minutes and again just before it sends;
+  if its inbox can't be read, it holds and retries rather than sending blind. The
+  pause survives restarts, shows on the dashboard, and **Resume** ends it early.
+  A bounce can land 30+ minutes late, so one more message may go out first.
+  Detecting this needs `gmail.readonly`: re-authorize each account and tick
+  the box to read email. Until then that account sends as before and the dashboard
+  shows "re-auth to detect blocks".
+- **Complaints stay invisible.** Spam reports never reach the sender. Watch for
+  accounts that suddenly throw send errors — the bot auto-pauses an account for
+  the day when Gmail signals a sending limit.
 - **List quality matters most.** Verify addresses before sending; high bounce or
   complaint rates will sink accounts faster than any pacing trick can save them.
