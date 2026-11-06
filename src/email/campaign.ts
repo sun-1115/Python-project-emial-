@@ -141,7 +141,7 @@ export async function runCampaign(store: UserStore, opts: CampaignOptions): Prom
           tokenStamp: tokenStamp(acct.tokenPath),
           cap: 0,
           sentToday: store.sentCountOnDay(acct.label, day),
-          nextReadyAt: 0,
+          nextReadyAt: Date.now() + nextGapMs(), // staggered, so a restart isn't a burst from every account
           disabled: false,
           scopeBlocked: false,
           paused: false,
