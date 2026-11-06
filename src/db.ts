@@ -642,9 +642,10 @@ export class UserStore {
     return (row?.paused ?? 0) === 1 || (row?.blocked_until ?? 0) > Date.now();
   }
 
+  /** Setting paused either way also clears a block pause: resume means resume. */
   setAccountPaused(account: string, paused: boolean): void {
     this.db
-      .prepare('UPDATE email_accounts SET paused = ? WHERE account = ?')
+      .prepare('UPDATE email_accounts SET paused = ?, blocked_until = NULL, blocked_reason = NULL WHERE account = ?')
       .run(paused ? 1 : 0, account);
   }
 
