@@ -32,6 +32,10 @@ const TOKEN_PATH = process.env.GMAIL_TOKEN_PATH?.trim() || './token.json';
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
+// Every Google call made through a client, token refreshes included. There is no
+// timeout by default, so one hung request would hold up the campaign's send loop.
+const REQUEST_TIMEOUT_MS = 30_000;
+
 interface ClientSecret {
   client_id: string;
   client_secret: string;
@@ -62,7 +66,12 @@ function loadClientSecret(): ClientSecret {
 
 function makeOAuthClient(redirectUri: string): OAuth2Client {
   const { client_id, client_secret } = loadClientSecret();
-  return new google.auth.OAuth2(client_id, client_secret, redirectUri);
+  return new google.auth.OAuth2({
+    clientId: client_id,
+    clientSecret: client_secret,
+    redirectUri,
+    transporterOptions: { timeout: REQUEST_TIMEOUT_MS },
+  });
 }
 
 /**
