@@ -220,6 +220,7 @@ export async function exchangeCodeAndSave(
 }
 
 const SEND_SCOPE = 'https://www.googleapis.com/auth/gmail.send';
+const READ_SCOPE = 'https://www.googleapis.com/auth/gmail.readonly';
 
 /** Human-readable reminder for the one consent-screen mistake that causes this. */
 export const MISSING_SCOPE_HINT =
@@ -236,11 +237,20 @@ export const MISSING_SCOPE_HINT =
  * so an old-but-working token is never retired on a guess.
  */
 export function hasSendScope(tokenPath: string): boolean | null {
+  return tokenHasScope(tokenPath, SEND_SCOPE);
+}
+
+/** Can this token read the inbox, and so see block bounces? Same null rule. */
+export function hasReadScope(tokenPath: string): boolean | null {
+  return tokenHasScope(tokenPath, READ_SCOPE);
+}
+
+function tokenHasScope(tokenPath: string, scope: string): boolean | null {
   if (!existsSync(tokenPath)) return null;
   try {
     const token = JSON.parse(readFileSync(tokenPath, 'utf8'));
     if (typeof token.scope !== 'string' || !token.scope.trim()) return null;
-    return token.scope.split(/\s+/).includes(SEND_SCOPE);
+    return token.scope.split(/\s+/).includes(scope);
   } catch {
     return null;
   }
