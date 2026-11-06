@@ -12,7 +12,8 @@ import { resolveMx } from 'node:dns/promises';
 import { statSync } from 'node:fs';
 import { loadConfig } from '../config.js';
 import { UserStore } from '../db.js';
-import { getAuthorizedClient, sendEmail, hasSendScope, MISSING_SCOPE_HINT } from './gmail.js';
+import { getAuthorizedClient, sendEmail, hasSendScope, hasReadScope, MISSING_SCOPE_HINT } from './gmail.js';
+import { findBlockedBounce } from './bounces.js';
 import { discoverAccounts, Account } from './accounts.js';
 import { buildBody, fillTemplate, pickTemplate, htmlOption, Recipient, Template } from './content.js';
 import { isPersonalEmail } from '../github.js';
@@ -312,6 +313,52 @@ export async function runCampaign(store: UserStore, opts: CampaignOptions): Prom
         log(`  ✗ [${s.acct.label}] ${r.email} — ${msg}`);
       }
       return false;
+    }
+  };
+
+  /** How long one address rests after Gmail blocks a message it sent. */
+  const BLOCK_PAUSE_MS = 24 * 60 * 60_000;
+  /** How soon to retry an account whose inbox couldn't be read. */
+  const BLOCK_RETRY_MS = 2 * 60_000;
+  const blockCheckWarned = new Set<string>(); // log an unreadable inbox once, not per send
+
+  /**
+   * Has Gmail bounced one of this account's messages as blocked? If so, pause only
+   * this address for a day from the block. Returns true when it must not send now.
+   * Runs before each send and on a periodic sweep, because a bounce can land 30+
+   * minutes after the message that caused it. A failed read holds the account and
+   * retries shortly, since sending blind could ignore a block. A token without
+   * gmail.readonly can never be checked, so it keeps sending (the dashboard says so).
+   */
+  const pausedByBlock = async (s: AccountState): Promise<boolean> => {
+    const label = s.acct.label;
+    const warnOnce = (msg: string) => {
+      if (!blockCheckWarned.has(label)) log(`  ⚠ [${label}] can't check for blocked mail: ${msg}`);
+      blockCheckWarned.add(label);
+    };
+    if (hasReadScope(s.acct.tokenPath) === false) {
+      warnOnce('token lacks gmail.readonly — re-authorize this account');
+      return false;
+    }
+    try {
+      if (!s.auth) s.auth = getAuthorizedClient(s.acct.tokenPath);
+      // A block older than the pause length has nothing left to pause.
+      const since = Math.max(store.blockCheckedAt(label), Date.now() - BLOCK_PAUSE_MS);
+      const block = await findBlockedBounce(s.auth, since);
+      blockCheckWarned.delete(label);
+      if (!block) return false;
+      store.setBlockCheckedAt(label, block.at);
+      const until = block.at + BLOCK_PAUSE_MS;
+      const to = block.recipient ?? 'unknown recipient';
+      store.blockAccount(label, until, `Gmail blocked a message to ${to}`);
+      s.paused = true;
+      s.cap = 0; // takes effect now; the sweep runs before the eligibility check
+      log(`  ⏸ [${label}] Gmail blocked a message to ${to} — paused until ${new Date(until).toISOString()}`);
+      return true;
+    } catch (err) {
+      warnOnce(err instanceof Error ? err.message : String(err));
+      s.nextReadyAt = Math.max(s.nextReadyAt, Date.now() + BLOCK_RETRY_MS);
+      return true;
     }
   };
 
