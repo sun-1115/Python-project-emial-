@@ -496,7 +496,7 @@ export async function runCampaign(store: UserStore, opts: CampaignOptions): Prom
     }
 
     if (!(await deliverable(r))) continue; // bad domain — suppressed, try another
-    if (await sendOne(s, r)) totalSent++;
+    if (await timed(`[${s.acct.label}] send`, () => sendOne(s, r))) totalSent++;
     s.nextReadyAt = Date.now() + nextGapMs(); // human-like gap before this account sends again
   }
 }
