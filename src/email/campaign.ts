@@ -12,7 +12,7 @@ import { resolveMx } from 'node:dns/promises';
 import { statSync } from 'node:fs';
 import { loadConfig } from '../config.js';
 import { UserStore } from '../db.js';
-import { getAuthorizedClient, sendEmail, hasSendScope, hasReadScope, MISSING_SCOPE_HINT } from './gmail.js';
+import { getAuthorizedClient, sendEmail, hasSendScope, hasReadScope, mailboxOf, MISSING_SCOPE_HINT } from './gmail.js';
 import { findBlockedBounce } from './bounces.js';
 import { discoverAccounts, Account } from './accounts.js';
 import { buildBody, fillTemplate, pickTemplate, htmlOption, Recipient, Template } from './content.js';
@@ -274,9 +274,11 @@ export async function runCampaign(store: UserStore, opts: CampaignOptions): Prom
       // Inside the try: a malformed/unreadable token file throws here, and that
       // must retire one account — not tear down the whole daemon.
       if (!s.auth) s.auth = getAuthorizedClient(s.acct.tokenPath);
+      const mailbox = mailboxOf(s.acct.tokenPath);
       const { id, threadId } = await sendEmail(r.email, subject, body, {
         auth: s.auth,
         ...htmlOption(body),
+        ...(mailbox ? { listUnsubscribe: `<mailto:${mailbox}?subject=unsubscribe>` } : {}),
       });
       store.recordSend({
         login: r.login, toEmail: r.email, subject, status: 'sent',
