@@ -135,6 +135,8 @@ export interface WarmupOptions {
   templates?: Template[];
   /** Subject used for templates that carry no leading "Subject:" line. */
   defaultSubject?: string;
+  /** A paused account sits this round out as a sender (it can still receive). */
+  isPaused?: (label: string) => boolean;
 }
 
 /** Fallback subject when neither the template nor the caller supplies one. */
@@ -207,6 +209,10 @@ export async function runWarmupRound(
   for (let i = 0; i < n; i++) {
     const from = peers[i];
     const to = peers[(i + off) % n];
+    if (opts.isPaused?.(from.label)) {
+      log(`  ⏸ ${from.address} is paused — not sending this round.`);
+      continue;
+    }
     const { subject, body, source } = pickMessage(i + off, to, opts);
     try {
       const auth = getAuthorizedClient(from.tokenPath);
