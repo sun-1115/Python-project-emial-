@@ -365,6 +365,18 @@ export async function runCampaign(store: UserStore, opts: CampaignOptions): Prom
     }
   };
 
+  /** Report any step slow enough to have held up the whole send loop. */
+  const STALL_WARN_MS = 60_000;
+  const timed = async <T>(what: string, step: () => Promise<T>): Promise<T> => {
+    const startedAt = Date.now();
+    try {
+      return await step();
+    } finally {
+      const took = Date.now() - startedAt;
+      if (took >= STALL_WARN_MS) log(`  ⚠ ${what} held up sending for ${Math.round(took / 1000)}s`);
+    }
+  };
+
   let totalSent = 0;
   const limitReached = () => opts.totalLimit != null && opts.totalLimit > 0 && totalSent >= opts.totalLimit;
 
@@ -431,10 +443,12 @@ export async function runCampaign(store: UserStore, opts: CampaignOptions): Prom
 
     if (Date.now() >= nextBlockSweep) {
       nextBlockSweep = Date.now() + BLOCK_SWEEP_MS;
-      for (const s of states) {
-        if (stopped()) break;
-        if (!s.paused && !s.disabled) await pausedByBlock(s);
-      }
+      await timed('Block sweep', async () => {
+        for (const s of states) {
+          if (stopped()) break;
+          if (!s.paused && !s.disabled) await pausedByBlock(s);
+        }
+      });
     }
 
     // Send during business hours, and — if a catch-up extension is configured —
