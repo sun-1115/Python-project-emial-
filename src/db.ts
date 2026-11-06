@@ -665,6 +665,20 @@ export class UserStore {
     return { until: row.blocked_until, reason: row.blocked_reason };
   }
 
+  /** Timestamp of the newest block already acted on for this account (0 = none). */
+  blockCheckedAt(account: string): number {
+    const row = this.db
+      .prepare('SELECT block_checked_at FROM email_accounts WHERE account = ?')
+      .get(account) as { block_checked_at: number | null } | undefined;
+    return row?.block_checked_at ?? 0;
+  }
+
+  setBlockCheckedAt(account: string, at: number): void {
+    this.db
+      .prepare('UPDATE email_accounts SET block_checked_at = ? WHERE account = ?')
+      .run(at, account);
+  }
+
   /** Successful sends by this account on the given calendar day (UK date key). */
   sentCountOnDay(account: string, day: string): number {
     const row = this.db
