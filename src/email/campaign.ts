@@ -383,6 +383,7 @@ export async function runCampaign(store: UserStore, opts: CampaignOptions): Prom
     for (const s of states) {
       if (limitReached()) break;
       if (s.disabled || s.sentToday >= s.cap) continue;
+      if (await pausedByBlock(s)) continue;
       const r = nextRecipient();
       if (!r) break;
       if (!(await deliverable(r))) continue;
