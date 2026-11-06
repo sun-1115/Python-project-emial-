@@ -317,9 +317,12 @@
       accountsEl.innerHTML = accounts.map((a) => {
         const pct = a.cap > 0 ? Math.min(100, Math.round((a.sentToday / a.cap) * 100)) : 0;
         const full = a.cap > 0 && a.sentToday >= a.cap;
-        const status = a.paused
-          ? '<span class="badge paused">paused</span>'
-          : '<span class="badge active">active</span>';
+        const status = a.blocked
+          ? `<span class="badge paused" title="${esc(a.blocked.reason || 'Gmail blocked a message')}">blocked until ${esc(new Date(a.blocked.until).toLocaleString())}</span>`
+          : a.paused
+            ? '<span class="badge paused">paused</span>'
+            : '<span class="badge active">active</span>';
+        const noBlockCheck = a.canDetectBlocks ? '' : ' · re-auth to detect blocks';
         const tok = a.token || {};
         const tokBadge = tok.ok
           ? '<span class="badge tok-ok">valid</span>'
