@@ -1,4 +1,4 @@
-// Gmail sender — OAuth 2.0 (send-only scope) with token persistence & auto-refresh,
+// Gmail sender — OAuth 2.0 with token persistence & auto-refresh,
 // MIME construction (text/plain + optional text/html, Cc/Bcc, attachments), and
 // users.messages.send with exponential backoff on 429 / 5xx.
 //
@@ -12,7 +12,9 @@ import { google } from 'googleapis';
 // google-auth-library can resolve to a duplicate copy and clash with googleapis.
 type OAuth2Client = InstanceType<typeof google.auth.OAuth2>;
 
-// Send-only, plus identity. `openid`/`userinfo.email` grant NO mailbox access —
+// Send, read, plus identity. gmail.readonly is what lets the campaign see
+// "Message blocked" bounces, which only ever arrive in the inbox (see bounces.ts).
+// `openid`/`userinfo.email` grant NO mailbox access —
 // they only reveal WHICH account consented, which is what lets us prove that
 // token-<label>.json really belongs to <label>@gmail.com. Without them the label
 // is just a filename someone typed at auth time, and a token authorized while
@@ -20,6 +22,7 @@ type OAuth2Client = InstanceType<typeof google.auth.OAuth2>;
 // then reports sends under a name that never sent them.
 export const SCOPES = [
   'https://www.googleapis.com/auth/gmail.send',
+  'https://www.googleapis.com/auth/gmail.readonly',
   'openid',
   'https://www.googleapis.com/auth/userinfo.email',
 ];
