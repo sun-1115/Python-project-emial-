@@ -34,3 +34,23 @@ export function senderAddress(from: string): string {
   return (from.match(/<([^>]+)>/)?.[1] ?? from).trim().toLowerCase();
 }
 
+/** Minimal shape of a Gmail message part (recursive for multipart messages). */
+interface MessagePart {
+  mimeType?: string | null;
+  body?: { data?: string | null } | null;
+  parts?: MessagePart[] | null;
+}
+
+/** Decoded content of the first part of this type, searching nested parts. */
+function partText(part: MessagePart | null | undefined, mimeType: string): string | null {
+  if (!part) return null;
+  if (part.mimeType === mimeType && part.body?.data) {
+    return Buffer.from(part.body.data, 'base64url').toString('utf8');
+  }
+  for (const child of part.parts ?? []) {
+    const found = partText(child, mimeType);
+    if (found !== null) return found;
+  }
+  return null;
+}
+
