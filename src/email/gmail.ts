@@ -358,6 +358,7 @@ export interface SendEmailOptions {
   cc?: string | string[];
   bcc?: string | string[];
   html?: string; // if set, message is sent as multipart/alternative (text + html)
+  listUnsubscribe?: string; // List-Unsubscribe header value, e.g. <mailto:me@x.com?subject=unsubscribe>
   attachments?: Attachment[];
   auth?: OAuth2Client; // reuse one client across many sends (campaign)
 }
@@ -404,6 +405,7 @@ export function buildRawMessage(
   if (opts.cc) headers.push(`Cc: ${asList(opts.cc)}`);
   if (opts.bcc) headers.push(`Bcc: ${asList(opts.bcc)}`);
   headers.push(`Subject: ${encodeHeader(subject)}`);
+  if (opts.listUnsubscribe) headers.push(`List-Unsubscribe: ${opts.listUnsubscribe}`);
   headers.push('MIME-Version: 1.0');
 
   const parts: string[] = [];
