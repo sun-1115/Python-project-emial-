@@ -448,6 +448,9 @@ export async function runCampaign(store: UserStore, opts: CampaignOptions): Prom
   // pause lands (and shows on the dashboard) without waiting for that account's turn.
   const BLOCK_SWEEP_MS = 5 * 60_000;
   let nextBlockSweep = 0;
+  const OPT_OUT_SCAN_MS = 60 * 60_000;
+  let nextOptOutScan = 0;
+  let optOutScanRunning = false;
 
   log('Daemon started.');
   for (;;) {
@@ -465,6 +468,14 @@ export async function runCampaign(store: UserStore, opts: CampaignOptions): Prom
     // change additionally rolls the per-day counters.
     if (today !== currentDay) refreshDay(today);
     else syncAccounts(today);
+
+    if (Date.now() >= nextOptOutScan && !optOutScanRunning) {
+      nextOptOutScan = Date.now() + OPT_OUT_SCAN_MS;
+      optOutScanRunning = true;
+      void scanOptOuts().finally(() => {
+        optOutScanRunning = false;
+      });
+    }
 
     if (Date.now() >= nextBlockSweep) {
       nextBlockSweep = Date.now() + BLOCK_SWEEP_MS;
