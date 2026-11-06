@@ -251,6 +251,18 @@ export class UserStore {
       }
     }
 
+    // email_accounts gained an automatic, self-expiring pause for blocked mail.
+    const acctCols = this.db.prepare('PRAGMA table_info(email_accounts)').all() as { name: string }[];
+    if (!acctCols.some((c) => c.name === 'blocked_until')) {
+      this.db.exec('ALTER TABLE email_accounts ADD COLUMN blocked_until INTEGER'); // epoch ms
+    }
+    if (!acctCols.some((c) => c.name === 'blocked_reason')) {
+      this.db.exec('ALTER TABLE email_accounts ADD COLUMN blocked_reason TEXT');
+    }
+    if (!acctCols.some((c) => c.name === 'block_checked_at')) {
+      this.db.exec('ALTER TABLE email_accounts ADD COLUMN block_checked_at INTEGER'); // newest block acted on
+    }
+
 
     this.migrateToSurrogateId();
   }
