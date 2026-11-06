@@ -105,10 +105,12 @@ All knobs live in `.env` (see `.env.example`): timezone, window hours/days,
 
 - **Pause a degrading account** without losing history:
   `UPDATE email_accounts SET paused = 1 WHERE account = 'alice';`
-- **Honor opt-outs** via the **Do-not-email list** on the Email dashboard
-  (`/email.html`): paste any address that replies "unsubscribe" (plus hard
-  bounces) and the campaign will never send to it again. Send-only scope can't
-  read replies, so scan each inbox and add opt-outs there.
+- **Opt-outs are honored automatically.** Every campaign message has an unsubscribe
+  line and a `List-Unsubscribe` header. Each hour the campaign reads replies from
+  people it has emailed, and any whose own words ask to stop (not the quoted footer)
+  go on the **Do-not-email list**. This needs `gmail.readonly`, so check by hand any
+  account the dashboard marks "re-auth to detect blocks". English wording only:
+  add other requests, plus hard bounces, to the list on the dashboard (`/email.html`).
 - **Blocked mail pauses that address for 24 hours.** When Gmail bounces a message
   as "Message blocked", the address that sent it stops sending (campaign and
   warm-up) for a day from the bounce, then resumes by itself; other addresses carry
