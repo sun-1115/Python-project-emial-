@@ -14,10 +14,10 @@ export interface Recipient {
 }
 
 /** Default opt-out footer. On consumer Gmail we can't host a link, so we invite
- *  a reply — which you MUST honor by suppressing that address. */
+ *  a reply — the campaign suppresses that address when one arrives (optouts.ts). */
 export const DEFAULT_UNSUBSCRIBE =
   process.env.EMAIL_UNSUBSCRIBE_TEXT?.trim() ||
-  "";
+  'If you\'d prefer not to hear from me again, just reply "unsubscribe" and I won\'t contact you again.';
 
 /** Resolve {a|b|c} spintax by picking one option at random, recursively. */
 export function spin(text: string): string {
