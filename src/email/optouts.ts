@@ -29,3 +29,8 @@ export function isOptOut(subject: string, ownText: string): boolean {
   return OPT_OUT_RE.test(subject) || OPT_OUT_RE.test(ownText);
 }
 
+/** The bare address from a From header: `Jane <jane@x.com>` → `jane@x.com`. */
+export function senderAddress(from: string): string {
+  return (from.match(/<([^>]+)>/)?.[1] ?? from).trim().toLowerCase();
+}
+
