@@ -404,6 +404,11 @@ export async function runCampaign(store: UserStore, opts: CampaignOptions): Prom
     }
   };
 
+  // Look for blocks across every account, not only the one about to send, so a
+  // pause lands (and shows on the dashboard) without waiting for that account's turn.
+  const BLOCK_SWEEP_MS = 5 * 60_000;
+  let nextBlockSweep = 0;
+
   log('Daemon started.');
   for (;;) {
     if (stopped()) {
@@ -420,6 +425,14 @@ export async function runCampaign(store: UserStore, opts: CampaignOptions): Prom
     // change additionally rolls the per-day counters.
     if (today !== currentDay) refreshDay(today);
     else syncAccounts(today);
+
+    if (Date.now() >= nextBlockSweep) {
+      nextBlockSweep = Date.now() + BLOCK_SWEEP_MS;
+      for (const s of states) {
+        if (stopped()) break;
+        if (!s.paused && !s.disabled) await pausedByBlock(s);
+      }
+    }
 
     // Send during business hours, and — if a catch-up extension is configured —
     // keep going past the window until each account reaches its daily cap.
