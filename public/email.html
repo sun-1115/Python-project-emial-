@@ -330,7 +330,7 @@
         const reauth = `<button class="toggle reauth" data-auth="${esc(a.label)}">${tok.ok ? 'Re-auth' : 'Authorize'}</button>`;
         const test = `<button class="toggle" data-test="${esc(a.label)}"${tok.ok ? '' : ' disabled title="Authorize this account first"'}>Test</button>`;
         return `<tr>
-          <td><div class="acct">${esc(a.label)}</div><div class="age">day ${a.ageDays} · cap ${a.cap}/day</div></td>
+          <td><div class="acct">${esc(a.label)}</div><div class="age">day ${a.ageDays} · cap ${a.cap}/day${noBlockCheck}</div></td>
           <td><div class="prog">
             <div class="track"><div class="fill ${full ? 'full' : ''}" style="width:${pct}%"></div></div>
             <span class="num">${a.sentToday}/${a.cap}</span>
